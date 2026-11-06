@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ЯзУч - Приложение</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { mint: '#98FF98' } } }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Nunito', sans-serif; }
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 transition-colors duration-300">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const tg = window.Telegram.WebApp;
+        const ADMIN_ID = 1311119781;
+
+        const AppStorage = {
+            save: (key, value) => {
+                const strVal = typeof value === 'string' ? value : JSON.stringify(value);
+                try {
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) tg.CloudStorage.setItem(key, strVal);
+                    localStorage.setItem(key, strVal); 
+                } catch (e) { console.error("Save error", e); }
+            },
+            loadAll: (callback) => {
+                const keys = ['jazuch_userData', 'jazuch_myLanguages', 'jazuch_topics', 'jazuch_theme', 'jazuch_isRegistered', 'jazuch_goals', 'jazuch_customFlags'];
+                const localFallback = () => {
+                    const values = {};
+                    keys.forEach(k => { values[k] = localStorage.getItem(k); });
+                    callback(values);
+                };
+
+                try {
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) {
+                        tg.CloudStorage.getItems(keys, (error, values) => {
+                            if (error || !values) localFallback();
+                            else {
+                                keys.forEach(k => {
+                                    if (!values[k] && localStorage.getItem(k)) {
+                                        values[k] = localStorage.getItem(k);
+                                        tg.CloudStorage.setItem(k, values[k]);
+                                    }
+                                });
+                                callback(values);
+                            }
+                        });
+                    } else localFallback();
+                } catch(e) { localFallback(); }
+            },
+            clear: (callback) => {
+                try {
+                    localStorage.clear();
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) {
+                        tg.CloudStorage.removeItems(['jazuch_userData', 'jazuch_myLanguages', 'jazuch_topics', 'jazuch_theme', 'jazuch_isRegistered', 'jazuch_goals', 'jazuch_customFlags'], callback);
+                    } else callback();
+                } catch(e) { callback(); }
+            }
+        };
+
+        const translations = {
+            ru: {
+                welcome: "Добро пожаловать", yourName: "Ваше имя", whichLang: "Какой язык будем изучать?", login: "Войти в систему", welcomeBack: "С возвращением", goalCalendar: "Календарь целей", clickDay: "Нажми на день для создания или редактирования", myLangs: "Мои языки", noLangs: "У вас пока нет добавленных языков.", addLang: "Добавить язык", customLangBtn: "✨ Свой язык...", customLangTitle: "Добавить свой язык", customLangName: "Название языка", customLangEmoji: "Флаг или эмодзи (по желанию)", settings: "Настройки", toDashboard: "На рабочий стол", profileName: "Имя профиля", uiLang: "Язык интерфейса", resetData: "Сбросить данные приложения", resetConfirm: "Удалить все данные?", dashboard: "Рабочий стол", empty: "Здесь пока пусто.", createTopic: "Создать тему", newTopic: "Новая тема", topics: "тем", cards: "карточек", cancel: "Отмена", done: "Готово", topicName: "Название темы", example: "Например: Семья, Глаголы...", wordsInTopic: "Слова в теме", word: "Слово", translation: "Перевод", addCard: "+ Добавить карточку", exit: "← Выйти", dontRemember: "Не помню ❌", remember: "Помню ✅", completed: "Тема пройдена! Отличная работа.", selectLang: "Выберите язык...", confirmDeleteLang: "Вы уверены, что хотите удалить язык", alertNoLang: "Пожалуйста, выберите язык", alertNoTopic: "Введите название темы!", alertNoWords: "Добавьте хотя бы одну пару слов!", back: "← Рабочий стол", support: "Написать в поддержку", supportDesc: "Опишите вашу проблему, идею или предложение.", send: "Отправить", goalSet: "Поставить цель", goalEdit: "Редактировать напоминание", deleteGoal: "Удалить", goalText: "Ваша цель на день", goalTime: "Время напоминания", saveGoal: "Сохранить", syncBot: "Синхронизировать напоминания с ботом", adminPanel: "Панель Администратора", adminTickets: "Обращения пользователей", adminBroadcast: "Оповещение пользователей", reply: "Ответить", markRead: "Прочитано ✓", broadcastAll: "Всем пользователям", selectUser: "Выберите пользователя", faqBtn: "ЧаВо", faqTitle: "Как учить эффективно? 🧠", faq1Q: "Как работают карточки?", faq1A: "Это метод активного припоминания. Бот показывает слово, вы пытаетесь вспомнить перевод вслух или про себя, переворачиваете карточку и честно оцениваете себя («Помню» или «Не помню»).", faq2Q: "Как правильно создавать темы?", faq2A: "Разбивайте слова на небольшие тематические блоки по 10–20 слов. Например: «Еда», «Базовые глаголы», «В аэропорту». Мозгу гораздо проще запоминать слова в контексте одной ассоциации.", faq3Q: "Зачем нужны цели в календаре?", faq3A: "Регулярность важнее длительности! Лучше учить по 10 минут каждый день, чем 2 часа раз в неделю. Поставьте напоминание в календаре и нажмите «Синхронизировать с ботом».", faq4Q: "Идеальные интервалы повторений ⏱️", faq4A: "По кривой забывания Эббингауза повторять материал нужно по такой схеме:\n• 1-е повторение — сразу после изучения;\n• 2-е повторение — через 20–30 минут;\n• 3-е повторение — через 1 день (на следующее утро);\n• 4-е повторение — через 2–3 дня;\n• 5-е повторение — через 7 дней;\n• 6-е повторение — через 2–3 недели.\nСледите за статистикой в каждом языке: приложение само подскажет, на какие слова стоит сделать упор!",
+                shareTitle: "Понравилось приложение — поделись с друзьями", shareBtn: "Поделиться приложением 🔗", shareCopied: "Ссылка скопирована! Поделись ею с друзьями",
+                statsBtn: "📊 Статистика", langStatsTitle: "Статистика языка", totalAttempts: "Пройдено раз", correctAns: "Правильно", wrongAns: "Ошибок", accuracy: "Точность", createdDate: "Создана", resetLangStats: "Сбросить статистику языка", resetCardStats: "Сбросить стат.", resetStatsConfirm: "Сбросить статистику? Прогресс обнулится, но сами карточки останутся.",
+                recommendations: "Рекомендации и анализ 💡", focusOn: "На что сделать упор (сложные слова):", bestKnown: "Отлично знаете:", needPractice: "Мало практики (новые карточки):", allCardsStats: "Детальная статистика по карточкам", noStatsYet: "Пока нет данных. Пройдите хотя бы одну тренировку в этом языке!", greatJobRec: "Вы отлично справляетесь! Продолжайте повторять слова в соответствии с интервалами в ЧаВо.", hardWordsRec: "Рекомендуем пройти темы со сложными словами ещё 2-3 раза сегодня вечером и завтра утром.",
+                creditsTitle: "Выражается благодарность", collabBtn: "Хотите сюда попасть? Давайте сотрудничать!", collabModalTitle: "Сотрудничество", collabDesc: "Напишите нам о своих идеях, и мы обязательно их рассмотрим!", shareContact: "📱 Поделиться своим контактом", contactError: "Ой! Кажется, ваш контакт недоступен. Введите его самостоятельно."
+            }
+        };
+
+        const DEFAULT_LANG_FLAGS = {
+            "Кряшенский": "", "Татарский": "", "Латынь": "🏛️", 
+            "Английский": "🇬🇧", "Испанский": "🇪🇸", "Французский": "🇫🇷", "Немецкий": "🇩🇪", 
+            "Итальянский": "🇮🇹", "Португальский": "🇵🇹", "Нидерландский": "🇳🇱", "Греческий": "🇬🇷",
+            "Польский": "🇵🇱", "Чешский": "🇨🇿", "Словацкий": "🇸🇰", "Румынский": "🇷🇴", 
+            "Венгерский": "🇭🇺", "Болгарский": "🇧🇬", "Сербский": "🇷🇸", "Хорватский": "🇭🇷",
+            "Шведский": "🇸🇪", "Норвежский": "🇳🇴", "Датский": "🇩🇰", "Финский": "🇫🇮",
+            "Украинский": "🇺🇦", "Белорусский": "🇧🇾", "Русский": "🇷🇺",
+            "Китайский": "🇨🇳", "Японский": "🇯🇵", "Корейский": "🇰🇷", "Хинди": "🇮🇳",
+            "Арабский": "🇸🇦", "Бенгальский": "🇧🇩", "Урду": "🇵🇰", "Индонезийский": "🇮🇩",
+            "Вьетнамский": "🇻🇳", "Тайский": "🇹🇭", "Филиппинский": "🇵🇭", "Малайский": "🇲🇾",
+            "Персидский": "🇮🇷", "Турецкий": "🇹🇷", "Иврит": "🇮🇱",
+            // Республиканские языки РФ (без флагов)
+            "Абазинский": "", "Аварский": "", "Адыгейский": "", "Алтайский": "", "Башкирский": "", 
+            "Бурятский": "", "Даргинский": "", "Ингушский": "", "Кабардино-черкесский": "", 
+            "Калмыцкий": "", "Карачаево-балкарский": "", "Карельский": "", "Коми": "", "Крымскотатарский": "", 
+            "Кумыкский": "", "Лакский": "", "Лезгинский": "", "Мансийский": "", "Марийский": "", 
+            "Мокшанский": "", "Ненецкий": "", "Ногайский": "", "Осетинский": "", "Рутульский": "", 
+            "Табасаранский": "", "Татский": "", "Тувинский": "", "Удмуртский": "", "Хакасский": "", 
+            "Хантыйский": "", "Цахурский": "", "Чеченский": "", "Чувашский": "", "Чукотский": "", 
+            "Эрзянский": "", "Якутский": ""
+        };
+        
+        // Строгая сортировка всех языков по алфавиту от А до Я
+        const ALL_LANGUAGES = Object.keys(DEFAULT_LANG_FLAGS).sort((a, b) => a.localeCompare(b, 'ru'));
+        
+        const greetings = ["Здравствуйте!", "Hello!", "Исәнмесез!", "Hola!", "Bonjour!", "Salve!", "Ciao!", "Χαίρετε!", "你好!", "こんにちは!"];
+
+        const migrateTopicsData = (rawTopics) => {
+            if (!Array.isArray(rawTopics)) return [];
+            const defaultDate = new Date().toLocaleDateString('ru-RU');
+            return rawTopics.map((topic, tIdx) => ({
+                ...topic,
+                id: topic.id || (Date.now() + tIdx),
+                createdAt: topic.createdAt || defaultDate,
+                words: Array.isArray(topic.words) ? topic.words.map((w, wIdx) => ({
+                    ...w,
+                    id: w.id || `${topic.id || Date.now()}_w_${wIdx}`,
+                    createdAt: w.createdAt || topic.createdAt || defaultDate,
+                    stats: w.stats ? { attempts: Number(w.stats.attempts) || 0, correct: Number(w.stats.correct) || 0, wrong: Number(w.stats.wrong) || 0 } : { attempts: 0, correct: 0, wrong: 0 }
+                })) : []
+            }));
+        };
+
+        function App() {
+            const [step, setStep] = useState('intro'); // intro, register, dashboard, app, settings, create_topic, faq, lang_stats, credits
+            const [isLoading, setIsLoading] = useState(true);
+            const stateLoaded = useRef(false);
+            
+            const [isRegistered, setIsRegistered] = useState(false);
+            const [theme, setTheme] = useState('light');
+            const [userData, setUserData] = useState({ name: '', goal: 'Свободное общение', uiLanguage: 'ru' });
+            const [myLanguages, setMyLanguages] = useState([]);
+            const [customFlags, setCustomFlags] = useState({});
+            const [topics, setTopics] = useState([]);
+            const [goals, setGoals] = useState({});
+            
+            const [activeLanguage, setActiveLanguage] = useState('');
+            const [activeTopic, setActiveTopic] = useState(null);
+            const [randomGreeting, setRandomGreeting] = useState('');
+            
+            const [selectedDate, setSelectedDate] = useState(null);
+            const [goalText, setGoalText] = useState('');
+            const [goalTime, setGoalTime] = useState('14:00');
+            
+            // Модальное окно поддержки/сотрудничества
+            const [supportModal, setSupportModal] = useState(false);
+            const [supportModalType, setSupportModalType] = useState('support'); // 'support' | 'collab'
+            const [supportText, setSupportText] = useState('');
+            
+            const [addLangModal, setAddLangModal] = useState(false);
+            const [selectedNewLang, setSelectedNewLang] = useState('');
+            const [isCustomLangMode, setIsCustomLangMode] = useState(false);
+            const [customLangName, setCustomLangName] = useState('');
+            const [customLangEmoji, setCustomLangEmoji] = useState('🌐');
+
+            const [shareToast, setShareToast] = useState(false);
+            
+            const [isAdminUser, setIsAdminUser] = useState(false);
+            const [adminData, setAdminData] = useState({ tickets: [], users: {} });
+            const [adminModal, setAdminModal] = useState(false);
+            const [adminTab, setAdminTab] = useState('tickets');
+            const [selectedTicket, setSelectedTicket] = useState(null);
+            const [ticketReplyText, setTicketReplyText] = useState('');
+            const [broadcastText, setBroadcastText] = useState('');
+            const [broadcastTarget, setBroadcastTarget] = useState('all');
+
+            const t = (key) => {
+                const lang = userData?.uiLanguage || 'ru';
+                return translations[lang]?.[key] || translations['ru'][key] || key;
+            };
+
+            const getFlag = (lang) => {
+                if (customFlags[lang] !== undefined) return customFlags[lang];
+                if (DEFAULT_LANG_FLAGS[lang] !== undefined) return DEFAULT_LANG_FLAGS[lang];
+                return '🌍';
+            };
+
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_userData', userData); }, [userData]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_myLanguages', myLanguages); }, [myLanguages]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_customFlags', customFlags); }, [customFlags]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_topics', topics); }, [topics]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_theme', theme); }, [theme]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_isRegistered', isRegistered); }, [isRegistered]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_goals', goals); }, [goals]);
+
+            useEffect(() => {
+                tg.expand();
+                setRandomGreeting(greetings[Math.floor(Math.random() * greetings.length)]);
+
+                const tgUserId = tg.initDataUnsafe?.user?.id;
+                if (Number(tgUserId) === ADMIN_ID) setIsAdminUser(true);
+
+                const urlParams = new URLSearchParams(window.location.search);
+                const dataParam = urlParams.get('data');
+                let botGoals = null;
+
+                if (dataParam) {
+                    try {
+                        const parsed = JSON.parse(decodeURIComponent(dataParam));
+                        if (parsed.goals) botGoals = parsed.goals;
+                        if (parsed.tickets) setAdminData(prev => ({ ...prev, tickets: parsed.tickets }));
+                        if (parsed.all_users) setAdminData(prev => ({ ...prev, users: parsed.all_users }));
+                        if (parsed.is_admin && (!tgUserId || Number(tgUserId) === ADMIN_ID)) setIsAdminUser(true);
+                    } catch(e) {}
+                }
+
+                AppStorage.loadAll((values) => {
+                    const isReg = values.jazuch_isRegistered === 'true';
+                    setIsRegistered(isReg);
+                    
+                    if (values.jazuch_theme) setTheme(values.jazuch_theme);
+                    if (botGoals && Object.keys(botGoals).length > 0) setGoals(botGoals);
+                    else if (values.jazuch_goals) { try { setGoals(JSON.parse(values.jazuch_goals)); } catch(e){} }
+                    
+                    if (values.jazuch_myLanguages) { try { setMyLanguages(JSON.parse(values.jazuch_myLanguages)); } catch(e){} }
+                    if (values.jazuch_customFlags) { try { setCustomFlags(JSON.parse(values.jazuch_customFlags)); } catch(e){} }
+                    if (values.jazuch_topics) {
+                        try {
+                            const parsedTopics = JSON.parse(values.jazuch_topics);
+                            setTopics(migrateTopicsData(parsedTopics));
+                        } catch(e){}
+                    }
+                    
+                    if (values.jazuch_userData) {
+                        try {
+                            const savedUser = JSON.parse(values.jazuch_userData);
+                            setUserData({ ...savedUser, uiLanguage: savedUser.uiLanguage || 'ru' });
+                        } catch(e){}
+                    } else {
+                        const tgName = tg.initDataUnsafe?.user?.first_name || '';
+                        setUserData({ name: tgName, goal: 'Свободное общение', uiLanguage: 'ru' });
+                    }
+                    
+                    setTimeout(() => {
+                        stateLoaded.current = true;
+                        setIsLoading(false);
+                        if (isReg) setStep('dashboard');
+                        else setStep('register');
+                    }, 300);
+                });
+            }, []);
+
+            useEffect(() => {
+                if (theme === 'dark') document.documentElement.classList.add('dark');
+                else document.documentElement.classList.remove('dark');
+            }, [theme]);
+
+            const handleSaveGoal = () => {
+                if (!goalText.trim()) return;
+                setGoals({ ...goals, [selectedDate]: { text: goalText.trim(), time: goalTime, notified: false } });
+                setSelectedDate(null);
+            };
+
+            const handleDeleteGoal = () => {
+                const updated = { ...goals };
+                delete updated[selectedDate];
+                setGoals(updated);
+                setSelectedDate(null);
+            };
+
+            const handleRecordCardAnswer = (topicId, wordId, isCorrect) => {
+                setTopics(prevTopics => prevTopics.map(topic => {
+                    if (topic.id !== topicId) return topic;
+                    return {
+                        ...topic,
+                        words: topic.words.map(w => {
+                            if (w.id !== wordId) return w;
+                            const st = w.stats || { attempts: 0, correct: 0, wrong: 0 };
+                            return { ...w, stats: { attempts: st.attempts + 1, correct: st.correct + (isCorrect ? 1 : 0), wrong: st.wrong + (isCorrect ? 0 : 1) } };
+                        })
+                    };
+                }));
+            };
+
+            const handleResetLanguageStats = (lang) => {
+                if (!confirm(t('resetStatsConfirm'))) return;
+                setTopics(prevTopics => prevTopics.map(topic => {
+                    if (topic.language !== lang) return topic;
+                    return { ...topic, words: topic.words.map(w => ({ ...w, stats: { attempts: 0, correct: 0, wrong: 0 } })) };
+                }));
+            };
+
+            const handleResetSingleCardStats = (topicId, wordId) => {
+                setTopics(prevTopics => prevTopics.map(topic => {
+                    if (topic.id !== topicId) return topic;
+                    return { ...topic, words: topic.words.map(w => { if (w.id !== wordId) return w; return { ...w, stats: { attempts: 0, correct: 0, wrong: 0 } }; }) };
+                }));
+            };
+
+            const handleShareApp = () => {
+                const shareUrl = "https://t.me/JazUch_bot";
+                const triggerToast = () => { setShareToast(true); setTimeout(() => setShareToast(false), 3000); };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(shareUrl).then(triggerToast).catch(() => {
+                        const el = document.createElement('textarea');
+                        el.value = shareUrl; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); triggerToast();
+                    });
+                } else {
+                    const el = document.createElement('textarea');
+                    el.value = shareUrl; document.body.appendChild(el); el.select(); document.execCommand('copy'); document.body.removeChild(el); triggerToast();
+                }
+            };
+
+            const handleShareContact = () => {
+                const user = tg.initDataUnsafe?.user;
+                if (user && user.username) {
+                    setSupportText(prev => prev + (prev.trim() ? '\n' : '') + '@' + user.username);
+                } else {
+                    alert(t('contactError'));
+                }
+            };
+
+            const Footer = () => (
+                <div className="mt-8 text-center pb-6 opacity-70">
+                    <p className="font-bold text-xs">«Телляргя сӧйӧӱ белян»</p>
+                    <p className="text-xs italic">«С любовью к языкам»</p>
+                    <button onClick={() => setStep('credits')} className="mt-3 text-sm text-teal-600 dark:text-teal-400 font-bold underline decoration-teal-300">
+                        Благодарности
+                    </button>
+                </div>
+            );
+
+            if (step === 'intro') {
+                return (
+                    <div className="h-screen w-screen bg-mint flex flex-col items-center justify-center overflow-hidden">
+                        <div className="text-center space-y-6 fade-in">
+                            <h1 className="text-5xl font-extrabold text-teal-900 drop-shadow-xl tracking-wide">ЯзУч</h1>
+                            <p className="text-3xl font-bold text-teal-800 opacity-90 animate-pulse shadow-sm">{randomGreeting}</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'register') {
+                return (
+                    <div className="min-h-screen p-6 flex flex-col items-center justify-center fade-in bg-gradient-to-br from-teal-50 to-mint dark:from-gray-900 dark:to-teal-900">
+                        <div className="w-full max-w-md bg-white/80 dark:bg-gray-800/80 backdrop-blur-lg rounded-3xl shadow-2xl p-8 space-y-6 border border-white/20 dark:border-gray-700">
+                            <h2 className="text-2xl font-bold text-center text-teal-600">{t('welcome')}</h2>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold">{t('yourName')}</label>
+                                <input type="text" value={userData.name} onChange={(e) => setUserData({...userData, name: e.target.value})} className="w-full p-3 bg-white dark:bg-gray-700 rounded-xl outline-none" />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold">{t('whichLang')}</label>
+                                {!isCustomLangMode ? (
+                                    <select value={activeLanguage} onChange={(e) => {
+                                        if (e.target.value === '__custom__') { setIsCustomLangMode(true); setActiveLanguage(''); } 
+                                        else { setActiveLanguage(e.target.value); }
+                                    }} className="w-full p-3 bg-white dark:bg-gray-700 rounded-xl outline-none">
+                                        <option value="">{t('selectLang')}</option>
+                                        <option value="__custom__" className="font-bold text-teal-600">{t('customLangBtn')}</option>
+                                        {ALL_LANGUAGES.map(l => <option key={l} value={l}>{getFlag(l)} {l}</option>)}
+                                    </select>
+                                ) : (
+                                    <div className="space-y-3 bg-teal-50/60 dark:bg-gray-700/50 p-3 rounded-2xl border border-teal-200 dark:border-gray-600">
+                                        <input type="text" placeholder={t('customLangName')} value={customLangName} onChange={e => setCustomLangName(e.target.value)} className="w-full p-2.5 bg-white dark:bg-gray-700 rounded-xl outline-none text-sm font-bold" />
+                                        <div className="flex gap-2 items-center">
+                                            <input type="text" placeholder={t('customLangEmoji')} value={customLangEmoji} onChange={e => setCustomLangEmoji(e.target.value)} className="flex-1 p-2.5 bg-white dark:bg-gray-700 rounded-xl outline-none text-sm" />
+                                            <button onClick={() => setIsCustomLangMode(false)} className="text-xs text-gray-500 px-2">{t('cancel')}</button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <button onClick={() => {
+                                let chosen = activeLanguage;
+                                if (isCustomLangMode) {
+                                    if (!customLangName.trim()) return alert(t('alertNoLang'));
+                                    chosen = customLangName.trim();
+                                    setCustomFlags(prev => ({ ...prev, [chosen]: customLangEmoji.trim() || '🌐' }));
+                                    setIsCustomLangMode(false);
+                                }
+                                if (chosen) {
+                                    setMyLanguages([chosen]);
+                                    setIsRegistered(true);
+                                    setStep('dashboard');
+                                } else alert(t('alertNoLang'));
+                            }} className="w-full py-4 bg-teal-500 text-white rounded-xl font-bold shadow-lg">{t('login')}</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'credits') {
+                return (
+                    <div className="min-h-screen p-6 fade-in flex flex-col bg-gray-50 dark:bg-gray-900">
+                        <button onClick={() => setStep('dashboard')} className="mb-6 text-teal-600 font-bold text-left">← {t('toDashboard')}</button>
+                        <h2 className="text-3xl font-extrabold mb-6 text-gray-800 dark:text-white">{t('creditsTitle')}</h2>
+                        
+                        <div className="space-y-4 flex-1">
+                            <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl shadow-sm border border-teal-100 dark:border-teal-900/50">
+                                <a href="https://t.me/jazykoved" target="_blank" className="font-bold text-lg text-blue-600 dark:text-blue-400 hover:underline">Канал «Замѣтки языковѣда»</a>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-6 mb-4">
+                            <button onClick={() => { setSupportModalType('collab'); setSupportModal(true); }} className="w-full py-4 bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 rounded-xl font-bold border border-teal-200 dark:border-teal-700 transition-colors hover:bg-teal-100 dark:hover:bg-teal-800">
+                                {t('collabBtn')}
+                            </button>
+                        </div>
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (step === 'faq') {
+                return (
+                    <div className="min-h-screen p-6 fade-in flex flex-col bg-gray-50 dark:bg-gray-900">
+                        <button onClick={() => setStep('dashboard')} className="mb-6 text-teal-600 font-bold text-left">← {t('toDashboard')}</button>
+                        <h2 className="text-3xl font-extrabold mb-6">{t('faqTitle')}</h2>
+                        <div className="space-y-4 flex-1">
+                            <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl shadow-sm">
+                                <h3 className="font-bold text-lg text-teal-600 mb-2">1. {t('faq1Q')}</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{t('faq1A')}</p>
+                            </div>
+                            <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl shadow-sm">
+                                <h3 className="font-bold text-lg text-teal-600 mb-2">2. {t('faq2Q')}</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{t('faq2A')}</p>
+                            </div>
+                            <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl shadow-sm">
+                                <h3 className="font-bold text-lg text-teal-600 mb-2">3. {t('faq3Q')}</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{t('faq3A')}</p>
+                            </div>
+                            <div className="bg-gradient-to-br from-teal-50 to-white dark:from-teal-900/30 dark:to-gray-800 p-5 rounded-2xl shadow-sm border border-teal-200 dark:border-teal-700">
+                                <h3 className="font-bold text-lg text-teal-600 dark:text-teal-400 mb-2">4. {t('faq4Q')}</h3>
+                                <p className="text-sm text-gray-700 dark:text-gray-200 whitespace-pre-line leading-relaxed">{t('faq4A')}</p>
+                            </div>
+                        </div>
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (step === 'dashboard') {
+                const today = new Date();
+                const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+                const daysArray = Array.from({length: daysInMonth}, (_, i) => i + 1);
+                const unreadTicketsCount = adminData.tickets.filter(tk => tk.status === 'open').length;
+
+                return (
+                    <div className="min-h-screen p-5 pb-20 fade-in bg-gray-50 dark:bg-gray-900 flex flex-col">
+                        <header className="flex justify-between items-center mb-6 pt-2">
+                            <div>
+                                <h1 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-teal-500 to-green-500">ЯзУч</h1>
+                                <p className="text-gray-500 font-medium text-sm">{t('welcomeBack')}, {userData.name}!</p>
+                            </div>
+                            <div className="flex gap-2 items-center">
+                                <button onClick={() => setStep('faq')} className="p-3 bg-white dark:bg-gray-800 rounded-full shadow-md text-xl" title={t('faqBtn')}>❓</button>
+                                {isAdminUser ? (
+                                    <>
+                                        <button onClick={() => { setAdminTab('broadcast'); setAdminModal(true); }} className="p-3 bg-teal-500 text-white rounded-full shadow-md text-xl" title={t('adminBroadcast')}>📢</button>
+                                        <button onClick={() => { setAdminTab('tickets'); setAdminModal(true); }} className="relative p-3 bg-white dark:bg-gray-800 rounded-full shadow-md text-xl" title={t('adminPanel')}>
+                                            🔔
+                                            {unreadTicketsCount > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white">{unreadTicketsCount}</span>}
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button onClick={() => { setSupportModalType('support'); setSupportModal(true); }} className="p-3 bg-white dark:bg-gray-800 rounded-full shadow-md text-xl">🎧</button>
+                                )}
+                                <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="p-3 bg-white dark:bg-gray-800 rounded-full shadow-md text-xl">{theme === 'light' ? '🌙' : '☀️'}</button>
+                                <button onClick={() => setStep('settings')} className="p-3 bg-white dark:bg-gray-800 rounded-full shadow-md text-xl">⚙️</button>
+                            </div>
+                        </header>
+
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 mb-6">
+                            <h2 className="font-bold text-lg mb-1 flex items-center gap-2">📅 {t('goalCalendar')}</h2>
+                            <p className="text-xs text-gray-400 mb-3">{t('clickDay')}</p>
+                            <div className="grid grid-cols-7 gap-1">
+                                {daysArray.map(day => {
+                                    const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                    const isToday = day === today.getDate();
+                                    const hasGoal = Boolean(goals[dateStr]);
+                                    return (
+                                        <div key={day} onClick={() => { setSelectedDate(dateStr); setGoalText(goals[dateStr]?.text || ''); setGoalTime(goals[dateStr]?.time || '14:00'); }} 
+                                             className={`relative aspect-square flex flex-col items-center justify-center rounded-lg text-sm font-semibold cursor-pointer transition-transform active:scale-95 ${isToday ? 'bg-teal-500 text-white shadow-md' : hasGoal ? 'bg-teal-50 dark:bg-teal-900/40 text-teal-700 dark:text-teal-200 border border-teal-200 dark:border-teal-700' : 'bg-gray-50 dark:bg-gray-700'}`}>
+                                            <span>{day}</span>
+                                            {hasGoal && <span className={`text-[9px] leading-none mt-0.5 ${isToday ? 'text-teal-100' : 'text-teal-600 dark:text-teal-300'}`}>{goals[dateStr].time}</span>}
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                            {Object.keys(goals).length > 0 && (
+                                <div className="mt-4 space-y-2 max-h-32 overflow-y-auto">
+                                    {Object.entries(goals).sort().map(([dateKey, gObj]) => (
+                                        <div key={dateKey} onClick={() => { setSelectedDate(dateKey); setGoalText(gObj.text); setGoalTime(gObj.time); }} className="flex justify-between items-center bg-gray-50 dark:bg-gray-700/60 px-3 py-2 rounded-xl text-xs cursor-pointer hover:bg-teal-50 dark:hover:bg-gray-700">
+                                            <div className="truncate pr-2">
+                                                <span className="font-bold text-teal-600 dark:text-teal-400 mr-2">{dateKey} ({gObj.time}):</span>
+                                                <span>{gObj.text}</span>
+                                            </div>
+                                            <span className="text-gray-400">✏️</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <button onClick={() => tg.sendData(JSON.stringify({action: 'sync_goals', goals: goals}))} className="w-full mt-4 py-2.5 bg-teal-50 dark:bg-teal-900/30 text-teal-600 dark:text-teal-300 font-bold rounded-xl text-sm hover:bg-teal-100 transition-colors">🔄 {t('syncBot')}</button>
+                        </div>
+
+                        <div className="flex-1">
+                            <h2 className="text-xl font-bold mb-4">{t('myLangs')}</h2>
+                            <div className="grid grid-cols-2 gap-4">
+                                {myLanguages.length === 0 && <p className="col-span-2 text-gray-500 text-sm">{t('noLangs')}</p>}
+                                {myLanguages.map(lang => {
+                                    const langTopics = topics.filter(t => t.language === lang);
+                                    const langWords = langTopics.flatMap(tp => tp.words || []);
+                                    const totalAtt = langWords.reduce((acc, w) => acc + (w.stats?.attempts || 0), 0);
+                                    const totalCorr = langWords.reduce((acc, w) => acc + (w.stats?.correct || 0), 0);
+                                    const accPercent = totalAtt > 0 ? Math.round((totalCorr / totalAtt) * 100) : null;
+
+                                    return (
+                                        <div key={lang} onClick={() => { setActiveLanguage(lang); setStep('app'); }} className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm cursor-pointer border border-gray-100 dark:border-gray-700 relative hover:shadow-md transition-all">
+                                            <div className="absolute top-3 right-3 flex gap-1.5">
+                                                <button onClick={(e) => { e.stopPropagation(); setActiveLanguage(lang); setStep('lang_stats'); }} className="p-1.5 bg-teal-50 dark:bg-teal-900/40 text-teal-600 rounded-lg text-sm hover:scale-105" title={t('statsBtn')}>📊</button>
+                                                <button onClick={(e) => { e.stopPropagation(); if(confirm(`${t('confirmDeleteLang')} ${lang}?`)) setMyLanguages(myLanguages.filter(l => l !== lang)); }} className="p-1.5 text-gray-300 hover:text-red-500 text-sm">🗑️</button>
+                                            </div>
+                                            <div className="text-3xl mb-2">{getFlag(lang)}</div>
+                                            <h3 className="font-bold text-lg truncate pr-6">{lang}</h3>
+                                            <div className="flex items-center justify-between mt-1">
+                                                <p className="text-xs text-gray-500">{langTopics.length} {t('topics')} • {langWords.length} {t('cards')}</p>
+                                                {accPercent !== null && <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${accPercent >= 75 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300'}`}>{accPercent}%</span>}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                <div onClick={() => { setSelectedNewLang(''); setIsCustomLangMode(false); setCustomLangName(''); setAddLangModal(true); }} className="bg-teal-50/50 dark:bg-gray-800 p-5 rounded-3xl flex flex-col items-center justify-center border-2 border-dashed border-teal-300 dark:border-teal-700 cursor-pointer hover:bg-teal-50 transition-colors min-h-[125px]">
+                                    <span className="text-2xl mb-1 text-teal-500">+</span>
+                                    <span className="text-teal-600 dark:text-teal-400 font-bold text-xs text-center">{t('addLang')}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <Footer />
+                        
+                        {addLangModal && (
+                            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in">
+                                <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
+                                    <h3 className="text-xl font-bold text-teal-600">{isCustomLangMode ? t('customLangTitle') : t('addLang')}</h3>
+                                    {!isCustomLangMode ? (
+                                        <div className="space-y-3">
+                                            <select value={selectedNewLang} onChange={(e) => {
+                                                if (e.target.value === '__custom__') setIsCustomLangMode(true);
+                                                else setSelectedNewLang(e.target.value);
+                                            }} className="w-full p-3.5 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none font-semibold">
+                                                <option value="">{t('selectLang')}</option>
+                                                <option value="__custom__" className="font-bold text-teal-600">{t('customLangBtn')}</option>
+                                                {ALL_LANGUAGES.map(l => (
+                                                    <option key={l} value={l} disabled={myLanguages.includes(l)}>
+                                                        {getFlag(l)} {l} {myLanguages.includes(l) ? '✓' : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">{t('customLangName')}</label>
+                                                <input type="text" placeholder="Например: Эсперанто, Башкирский..." value={customLangName} onChange={e => setCustomLangName(e.target.value)} className="w-full p-3 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none font-bold" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">{t('customLangEmoji')}</label>
+                                                <input type="text" placeholder="🌐" value={customLangEmoji} onChange={e => setCustomLangEmoji(e.target.value)} className="w-full p-3 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none" />
+                                            </div>
+                                            <button onClick={() => setIsCustomLangMode(false)} className="text-xs text-teal-600 font-bold">← Выбрать из списка</button>
+                                        </div>
+                                    )}
+                                    <div className="flex gap-2 pt-2">
+                                        <button onClick={() => setAddLangModal(false)} className="flex-1 py-3 bg-gray-100 dark:bg-gray-700 font-bold rounded-xl">{t('cancel')}</button>
+                                        <button onClick={() => {
+                                            let langToAdd = selectedNewLang;
+                                            if (isCustomLangMode) {
+                                                if (!customLangName.trim()) return alert(t('alertNoLang'));
+                                                langToAdd = customLangName.trim();
+                                                setCustomFlags(prev => ({ ...prev, [langToAdd]: customLangEmoji.trim() || '🌐' }));
+                                            }
+                                            if (!langToAdd) return alert(t('alertNoLang'));
+                                            if (!myLanguages.includes(langToAdd)) setMyLanguages([...myLanguages, langToAdd]);
+                                            setAddLangModal(false);
+                                        }} className="flex-1 py-3 bg-teal-500 text-white font-bold rounded-xl">{t('done')}</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {selectedDate && (
+                            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in">
+                                <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
+                                    <div className="flex justify-between items-center">
+                                        <h3 className="text-lg font-bold">{goals[selectedDate] ? t('goalEdit') : t('goalSet')} <span className="text-teal-500 text-sm block">{selectedDate}</span></h3>
+                                        {goals[selectedDate] && (
+                                            <button onClick={handleDeleteGoal} className="text-xs bg-red-50 text-red-500 px-3 py-1.5 rounded-xl font-bold hover:bg-red-100">🗑️ {t('deleteGoal')}</button>
+                                        )}
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-semibold text-gray-400">{t('goalText')}</label>
+                                        <input type="text" value={goalText} onChange={(e) => setGoalText(e.target.value)} placeholder="Выучить 20 новых слов..." className="w-full p-3 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-semibold text-gray-400">{t('goalTime')}</label>
+                                        <input type="time" value={goalTime} onChange={(e) => setGoalTime(e.target.value)} className="w-full p-3 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none font-bold" />
+                                    </div>
+                                    <div className="flex gap-2 pt-2">
+                                        <button onClick={() => setSelectedDate(null)} className="flex-1 py-3 bg-gray-100 dark:bg-gray-700 font-bold rounded-xl">{t('cancel')}</button>
+                                        <button onClick={handleSaveGoal} className="flex-1 py-3 bg-teal-500 text-white font-bold rounded-xl">{t('saveGoal')}</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Универсальное модальное окно: Поддержка или Сотрудничество */}
+                        {supportModal && (
+                            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in">
+                                <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 w-full max-w-sm space-y-4 shadow-2xl">
+                                    <h3 className="text-xl font-bold">{supportModalType === 'collab' ? t('collabModalTitle') : t('support')}</h3>
+                                    <p className="text-xs text-gray-400">{supportModalType === 'collab' ? t('collabDesc') : t('supportDesc')}</p>
+                                    
+                                    <textarea value={supportText} onChange={e => setSupportText(e.target.value)} placeholder="..." rows="4" className="w-full p-3 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none resize-none"></textarea>
+                                    
+                                    <button onClick={handleShareContact} className="w-full py-2.5 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl text-xs font-bold border border-blue-100 dark:border-blue-800 hover:bg-blue-100 transition-colors">
+                                        {t('shareContact')}
+                                    </button>
+                                    
+                                    <div className="flex gap-2 pt-2">
+                                        <button onClick={() => setSupportModal(false)} className="flex-1 py-3 bg-gray-100 dark:bg-gray-700 font-bold rounded-xl">{t('cancel')}</button>
+                                        <button onClick={() => { 
+                                            if(supportText.trim()){ 
+                                                tg.sendData(JSON.stringify({action: supportModalType, text: supportText})); 
+                                                setSupportModal(false); 
+                                                setSupportText('');
+                                            } 
+                                        }} className="flex-1 py-3 bg-teal-500 text-white font-bold rounded-xl">{t('send')}</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {adminModal && isAdminUser && (
+                            <div className="fixed inset-0 bg-gray-50 dark:bg-gray-900 z-50 flex flex-col p-5 overflow-y-auto fade-in">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-2xl font-extrabold text-teal-600">{t('adminPanel')} 🛡️</h2>
+                                    <button onClick={() => { setAdminModal(false); setSelectedTicket(null); }} className="text-red-500 font-bold text-xl px-2">✕</button>
+                                </div>
+
+                                <div className="flex gap-2 mb-6 bg-gray-200/70 dark:bg-gray-800 p-1 rounded-2xl">
+                                    <button onClick={() => { setAdminTab('tickets'); setSelectedTicket(null); }} className={`flex-1 py-2.5 rounded-xl font-bold text-sm transition-all ${adminTab === 'tickets' ? 'bg-white dark:bg-gray-700 text-teal-600 shadow-sm' : 'text-gray-500'}`}>
+                                        📬 {t('adminTickets')} ({adminData.tickets.filter(tk => tk.status === 'open').length})
+                                    </button>
+                                    <button onClick={() => { setAdminTab('broadcast'); setSelectedTicket(null); }} className={`flex-1 py-2.5 rounded-xl font-bold text-sm transition-all ${adminTab === 'broadcast' ? 'bg-white dark:bg-gray-700 text-teal-600 shadow-sm' : 'text-gray-500'}`}>
+                                        📢 {t('adminBroadcast')}
+                                    </button>
+                                </div>
+
+                                {adminTab === 'tickets' && !selectedTicket && (
+                                    <div className="space-y-3 flex-1">
+                                        {adminData.tickets.length === 0 ? (
+                                            <div className="text-center p-10 bg-white dark:bg-gray-800 rounded-3xl text-gray-400">Новых обращений пока нет.</div>
+                                        ) : (
+                                            adminData.tickets.map(ticket => (
+                                                <div key={ticket.id} onClick={() => { setSelectedTicket(ticket); setTicketReplyText(''); }} className={`bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border cursor-pointer hover:border-teal-400 transition-all ${ticket.status === 'read' ? 'opacity-60 border-gray-100 dark:border-gray-700' : 'border-teal-200 dark:border-teal-700'}`}>
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <div>
+                                                            <span className={`font-bold text-sm ${ticket.type === 'collab' ? 'text-purple-600' : 'text-teal-600'}`}>
+                                                                {ticket.type === 'collab' ? '🤝 Сотрудничество' : '📨 Обращение'} #{ticket.id}
+                                                            </span>
+                                                            <p className="text-xs font-semibold mt-0.5">
+                                                                От: {ticket.name} (ID: {ticket.user_id})
+                                                                {ticket.username ? (
+                                                                    <a href={`https://t.me/${ticket.username}`} target="_blank" onClick={e => e.stopPropagation()} className="text-blue-500 underline ml-1.5">@{ticket.username}</a>
+                                                                ) : (
+                                                                    <a href={`tg://user?id=${ticket.user_id}`} onClick={e => e.stopPropagation()} className="text-blue-500 underline ml-1.5">Профиль пользователя</a>
+                                                                )}
+                                                            </p>
+                                                        </div>
+                                                        <span className="text-xs px-2.5 py-1 rounded-full bg-teal-50 dark:bg-teal-900/40 text-teal-600 font-bold">Открыть →</span>
+                                                    </div>
+                                                    <p className="text-sm text-gray-700 dark:text-gray-200 line-clamp-2">{ticket.text}</p>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                )}
+
+                                {adminTab === 'tickets' && selectedTicket && (
+                                    <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-md border border-gray-100 dark:border-gray-700 space-y-4">
+                                        <button onClick={() => setSelectedTicket(null)} className="text-teal-600 text-sm font-bold">← Ко всем обращениям</button>
+                                        <div className="border-b border-gray-100 dark:border-gray-700 pb-3">
+                                            <h3 className="text-lg font-extrabold">{selectedTicket.type === 'collab' ? 'Сотрудничество' : 'Обращение'} #{selectedTicket.id}</h3>
+                                            <p className="text-sm text-gray-500 mt-1">
+                                                Отправитель: <b>{selectedTicket.name}</b> (ID: <code>{selectedTicket.user_id}</code>)
+                                            </p>
+                                            <div className="mt-2">
+                                                {selectedTicket.username ? (
+                                                    <a href={`https://t.me/${selectedTicket.username}`} target="_blank" className="inline-block text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-xl font-bold">🔗 Перейти в профиль @{selectedTicket.username}</a>
+                                                ) : (
+                                                    <a href={`tg://user?id=${selectedTicket.user_id}`} className="inline-block text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded-xl font-bold">🔗 Открыть профиль в Telegram</a>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-gray-50 dark:bg-gray-700/60 p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap">
+                                            {selectedTicket.text}
+                                        </div>
+
+                                        <div className="space-y-3 pt-2">
+                                            <label className="block text-xs font-bold text-gray-400 uppercase">Ответ от имени бота ЯзУч:</label>
+                                            <textarea value={ticketReplyText} onChange={e => setTicketReplyText(e.target.value)} placeholder="Введите ответ пользователю..." rows="4" className="w-full p-3 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none text-sm"></textarea>
+                                            <div className="flex gap-2">
+                                                <button onClick={() => {
+                                                    tg.sendData(JSON.stringify({action: 'admin_mark_read', ticket_id: selectedTicket.id}));
+                                                }} className="flex-1 py-3 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl font-bold text-sm">
+                                                    {t('markRead')}
+                                                </button>
+                                                <button onClick={() => {
+                                                    if (!ticketReplyText.trim()) return alert("Введите текст ответа!");
+                                                    tg.sendData(JSON.stringify({action: 'admin_reply', ticket_id: selectedTicket.id, user_id: selectedTicket.user_id, text: ticketReplyText.trim()}));
+                                                }} className="flex-1 py-3 bg-teal-500 text-white rounded-xl font-bold text-sm shadow-md">
+                                                    ✉️ {t('reply')}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {adminTab === 'broadcast' && (
+                                    <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm border border-teal-100 dark:border-gray-700 space-y-4">
+                                        <h3 className="font-bold text-lg">{t('adminBroadcast')} 📢</h3>
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">Получатель:</label>
+                                            <select value={broadcastTarget} onChange={e => setBroadcastTarget(e.target.value)} className="w-full p-3 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none font-semibold text-sm">
+                                                <option value="all">🌍 {t('broadcastAll')} ({Object.keys(adminData.users).length})</option>
+                                                {Object.entries(adminData.users).map(([uid, info]) => (
+                                                    <option key={uid} value={uid}>{info.first_name} ({info.username ? `@${info.username}` : `ID: ${uid}`})</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">Текст оповещения:</label>
+                                            <textarea value={broadcastText} onChange={e => setBroadcastText(e.target.value)} placeholder="Напишите новость или оповещение для пользователей..." rows="5" className="w-full p-3 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none text-sm"></textarea>
+                                        </div>
+                                        <button onClick={() => { if(broadcastText.trim()) tg.sendData(JSON.stringify({action: 'admin_broadcast', user_id: broadcastTarget, text: broadcastText.trim()})); }} className="w-full bg-teal-500 text-white py-3.5 rounded-xl font-bold shadow-md">🚀 {t('send')}</button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                );
+            }
+
+            if (step === 'lang_stats') {
+                return (
+                    <LanguageStatsScreen 
+                        t={t} language={activeLanguage} flag={getFlag(activeLanguage)} topics={topics.filter(tp => tp.language === activeLanguage)}
+                        onBack={() => setStep('dashboard')} onResetLang={() => handleResetLanguageStats(activeLanguage)} onResetCard={handleResetSingleCardStats} Footer={Footer}
+                    />
+                );
+            }
+
+            if (step === 'settings') {
+                return (
+                    <div className="min-h-screen p-6 fade-in flex flex-col bg-gray-50 dark:bg-gray-900 relative">
+                        <button onClick={() => setStep('dashboard')} className="mb-6 text-teal-600 font-bold text-left">← {t('toDashboard')}</button>
+                        <h2 className="text-3xl font-extrabold mb-6 text-gray-800 dark:text-white">⚙️ {t('settings')}</h2>
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-lg border border-gray-100 dark:border-gray-700 space-y-6">
+                            <div>
+                                <label className="block text-sm font-semibold mb-2">{t('profileName')}</label>
+                                <input type="text" value={userData.name} onChange={(e) => setUserData({...userData, name: e.target.value})} className="w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-xl outline-none" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold mb-2">{t('uiLang')}</label>
+                                <select value={userData.uiLanguage || 'ru'} onChange={(e) => setUserData({...userData, uiLanguage: e.target.value})} className="w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-xl outline-none font-semibold">
+                                    <option value="ru">🇷🇺 Русский (Базовый)</option>
+                                    <option value="en">🇬🇧 English</option>
+                                    <option value="tt">Татарча</option>
+                                    <option value="es">🇪🇸 Español</option>
+                                    <option value="fr">🇫🇷 Français</option>
+                                </select>
+                            </div>
+                            <button onClick={() => { if(confirm(t('resetConfirm'))) AppStorage.clear(() => window.location.reload()); }} className="w-full py-3 bg-red-50 dark:bg-red-900/20 text-red-500 rounded-xl font-bold text-sm">{t('resetData')}</button>
+                        </div>
+                        <div className="mt-6 bg-gradient-to-r from-teal-500/10 to-green-500/10 dark:from-teal-900/30 dark:to-gray-800 p-6 rounded-3xl border border-teal-200 dark:border-teal-800 text-center space-y-3">
+                            <p className="font-bold text-sm text-gray-700 dark:text-gray-200">{t('shareTitle')}</p>
+                            <button onClick={handleShareApp} className="w-full py-3.5 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-2xl shadow-md transition-transform active:scale-95">{t('shareBtn')}</button>
+                        </div>
+                        {shareToast && <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-gray-900/95 text-white px-5 py-3 rounded-2xl shadow-2xl text-xs font-bold text-center z-50 fade-in w-11/12 max-w-sm border border-teal-400">✅ {t('shareCopied')}</div>}
+                        <div className="flex-1"></div>
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (step === 'create_topic') {
+                return (
+                    <CreateTopicMode 
+                        t={t} language={activeLanguage} onSave={(newTopic) => { 
+                            const nowDate = new Date().toLocaleDateString('ru-RU');
+                            const topicId = Date.now();
+                            const preparedWords = newTopic.words.map((w, idx) => ({ ...w, id: `${topicId}_w_${idx}`, createdAt: nowDate, stats: { attempts: 0, correct: 0, wrong: 0 } }));
+                            setTopics([...topics, { id: topicId, name: newTopic.name, language: activeLanguage, createdAt: nowDate, words: preparedWords }]); 
+                            setStep('app'); 
+                        }} onCancel={() => setStep('app')} Footer={Footer}
+                    />
+                );
+            }
+
+            if (step === 'app' && !activeTopic) {
+                const currentTopics = topics.filter(t => t.language === activeLanguage);
+                return (
+                    <div className="min-h-screen p-5 pb-20 fade-in flex flex-col bg-gray-50 dark:bg-gray-900">
+                        <header className="flex justify-between items-center mb-6 pt-2">
+                            <button onClick={() => setStep('dashboard')} className="text-teal-600 font-bold">{t('back')}</button>
+                            <h1 className="text-xl font-bold">{getFlag(activeLanguage)} {activeLanguage}</h1>
+                            <button onClick={() => setStep('lang_stats')} className="bg-teal-50 dark:bg-teal-900/40 text-teal-600 dark:text-teal-300 px-3 py-1.5 rounded-xl font-bold text-xs">{t('statsBtn')}</button>
+                        </header>
+                        <div className="flex-1">
+                            {currentTopics.length === 0 ? (
+                                <div className="text-center p-8 bg-white dark:bg-gray-800 rounded-3xl border border-teal-100 dark:border-gray-700 mt-4">
+                                    <p className="text-gray-500 mb-6">{t('empty')}</p>
+                                    <button onClick={() => setStep('create_topic')} className="px-6 py-3 bg-teal-500 text-white font-bold rounded-xl">{t('createTopic')}</button>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 gap-4 mt-4">
+                                    {currentTopics.map(topic => {
+                                        const tAttempts = topic.words.reduce((acc, w) => acc + (w.stats?.attempts || 0), 0);
+                                        const tCorrect = topic.words.reduce((acc, w) => acc + (w.stats?.correct || 0), 0);
+                                        const tAcc = tAttempts > 0 ? Math.round((tCorrect / tAttempts) * 100) : null;
+                                        return (
+                                            <div key={topic.id} onClick={() => setActiveTopic(topic)} className="bg-white dark:bg-gray-800 p-5 rounded-2xl cursor-pointer border border-gray-100 dark:border-gray-700 flex justify-between items-center shadow-sm">
+                                                <div>
+                                                    <h3 className="font-bold text-lg mb-0.5">{topic.name}</h3>
+                                                    <p className="text-xs text-gray-400">{topic.words.length} {t('cards')} • {t('createdDate')}: {topic.createdAt || '—'}{tAcc !== null && <span className="ml-2 text-teal-600 font-bold">({tAcc}%)</span>}</p>
+                                                </div>
+                                                <div className="text-teal-500 text-xl">▶</div>
+                                            </div>
+                                        );
+                                    })}
+                                    <button onClick={() => setStep('create_topic')} className="w-full py-4 bg-teal-50 dark:bg-gray-800 text-teal-600 rounded-2xl font-bold border-2 border-dashed border-teal-300">+ {t('newTopic')}</button>
+                                </div>
+                            )}
+                        </div>
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (activeTopic) {
+                const latestTopicObj = topics.find(tp => tp.id === activeTopic.id) || activeTopic;
+                return <FlashcardMode t={t} topic={latestTopicObj} onRecordAnswer={handleRecordCardAnswer} onBack={() => setActiveTopic(null)} Footer={Footer} />;
+            }
+        }
+
+        function LanguageStatsScreen({ t, language, flag, topics, onBack, onResetLang, onResetCard, Footer }) {
+            const allCards = topics.flatMap(tp => tp.words.map(w => ({ ...w, topicId: tp.id, topicName: tp.name })));
+            const totalAttempts = allCards.reduce((sum, c) => sum + (c.stats?.attempts || 0), 0);
+            const totalCorrect = allCards.reduce((sum, c) => sum + (c.stats?.correct || 0), 0);
+            const totalWrong = allCards.reduce((sum, c) => sum + (c.stats?.wrong || 0), 0);
+            const overallAccuracy = totalAttempts > 0 ? Math.round((totalCorrect / totalAttempts) * 100) : 0;
+
+            const practicedCards = allCards.filter(c => (c.stats?.attempts || 0) > 0);
+            const unpracticedCards = allCards.filter(c => (c.stats?.attempts || 0) === 0);
+            const hardCards = [...practicedCards].filter(c => (c.stats.correct / c.stats.attempts) < 0.7 || c.stats.wrong > c.stats.correct).sort((a, b) => (a.stats.correct / a.stats.attempts) - (b.stats.correct / b.stats.attempts));
+            const bestCards = [...practicedCards].filter(c => (c.stats.correct / c.stats.attempts) >= 0.8 && c.stats.attempts >= 1).sort((a, b) => (b.stats.correct / b.stats.attempts) - (a.stats.correct / a.stats.attempts));
+
+            return (
+                <div className="min-h-screen p-5 pb-20 fade-in flex flex-col bg-gray-50 dark:bg-gray-900">
+                    <header className="flex justify-between items-center mb-6 pt-2">
+                        <button onClick={onBack} className="text-teal-600 font-bold">← {t('toDashboard')}</button>
+                        <h1 className="text-lg font-extrabold">{flag} {language}</h1>
+                        <button onClick={onResetLang} className="text-xs text-red-500 font-bold bg-red-50 dark:bg-red-900/20 px-2.5 py-1.5 rounded-xl">🗑️ Сброс</button>
+                    </header>
+                    <h2 className="text-2xl font-extrabold mb-4">{t('langStatsTitle')} 📊</h2>
+                    <div className="grid grid-cols-2 gap-3 mb-6">
+                        <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+                            <p className="text-xs text-gray-400">{t('totalAttempts')}</p>
+                            <p className="text-2xl font-extrabold text-gray-800 dark:text-white">{totalAttempts}</p>
+                        </div>
+                        <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+                            <p className="text-xs text-gray-400">{t('accuracy')}</p>
+                            <p className="text-2xl font-extrabold text-teal-600">{overallAccuracy}%</p>
+                        </div>
+                        <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-2xl border border-green-100 dark:border-green-800">
+                            <p className="text-xs text-green-600 dark:text-green-400">{t('correctAns')} ✅</p>
+                            <p className="text-xl font-extrabold text-green-700 dark:text-green-300">{totalCorrect}</p>
+                        </div>
+                        <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-2xl border border-red-100 dark:border-red-800">
+                            <p className="text-xs text-red-500 dark:text-red-400">{t('wrongAns')} ❌</p>
+                            <p className="text-xl font-extrabold text-red-600 dark:text-red-300">{totalWrong}</p>
+                        </div>
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm border border-teal-100 dark:border-gray-700 mb-6 space-y-4">
+                        <h3 className="font-bold text-lg text-teal-600">{t('recommendations')}</h3>
+                        {totalAttempts === 0 ? <p className="text-sm text-gray-500">{t('noStatsYet')}</p> : (
+                            <>
+                                <p className="text-xs bg-teal-50 dark:bg-teal-900/30 text-teal-800 dark:text-teal-200 p-3 rounded-xl font-semibold">{hardCards.length > 0 ? t('hardWordsRec') : t('greatJobRec')}</p>
+                                {hardCards.length > 0 && (
+                                    <div><p className="text-xs font-bold text-red-500 uppercase mb-2">⚠️ {t('focusOn')}</p><div className="flex flex-wrap gap-1.5">{hardCards.slice(0, 8).map(c => <span key={c.id} className="text-xs bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-2.5 py-1 rounded-lg font-bold">{c.q} → {c.a} ({Math.round((c.stats.correct / c.stats.attempts) * 100)}%)</span>)}</div></div>
+                                )}
+                                {bestCards.length > 0 && (
+                                    <div><p className="text-xs font-bold text-green-600 uppercase mb-2">🌟 {t('bestKnown')}</p><div className="flex flex-wrap gap-1.5">{bestCards.slice(0, 8).map(c => <span key={c.id} className="text-xs bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-2.5 py-1 rounded-lg font-bold">{c.q} ({Math.round((c.stats.correct / c.stats.attempts) * 100)}%)</span>)}</div></div>
+                                )}
+                                {unpracticedCards.length > 0 && (
+                                    <div><p className="text-xs font-bold text-gray-400 uppercase mb-1">⏳ {t('needPractice')} ({unpracticedCards.length})</p><p className="text-xs text-gray-500 truncate">{unpracticedCards.map(c => c.q).join(', ')}</p></div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                    <h3 className="font-bold text-lg mb-3">{t('allCardsStats')} ({allCards.length})</h3>
+                    <div className="space-y-3 flex-1">
+                        {allCards.length === 0 ? <p className="text-sm text-gray-400">{t('empty')}</p> : allCards.map(card => {
+                            const att = card.stats?.attempts || 0, corr = card.stats?.correct || 0, wrg = card.stats?.wrong || 0, pct = att > 0 ? Math.round((corr / att) * 100) : 0;
+                            return (
+                                <div key={card.id} className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div>
+                                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-500 rounded-md mr-2">{card.topicName}</span>
+                                            <span className="text-[11px] text-gray-400">📅 {t('createdDate')}: {card.createdAt || '—'}</span>
+                                            <h4 className="font-extrabold text-base mt-1">{card.q} <span className="text-gray-400 font-normal">—</span> <span className="text-teal-600">{card.a}</span></h4>
+                                        </div>
+                                        <button onClick={() => onResetCard(card.topicId, card.id)} className="text-[11px] text-gray-400 hover:text-red-500 bg-gray-50 dark:bg-gray-700 px-2 py-1 rounded-lg">🔄 {t('resetCardStats')}</button>
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-2 text-center bg-gray-50 dark:bg-gray-700/50 p-2 rounded-xl text-xs">
+                                        <div><span className="block text-[10px] text-gray-400">{t('totalAttempts')}</span><span className="font-bold">{att}</span></div>
+                                        <div><span className="block text-[10px] text-green-600">{t('correctAns')}</span><span className="font-bold text-green-600">{corr}</span></div>
+                                        <div><span className="block text-[10px] text-red-500">{t('wrongAns')}</span><span className="font-bold text-red-500">{wrg}</span></div>
+                                        <div><span className="block text-[10px] text-teal-600">%</span><span className="font-extrabold text-teal-600">{att > 0 ? `${pct}%` : '—'}</span></div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <Footer />
+                </div>
+            );
+        }
+
+        function CreateTopicMode({ t, language, onSave, onCancel, Footer }) {
+            const [topicName, setTopicName] = useState('');
+            const [words, setWords] = useState([{q: '', a: ''}]);
+            const handleSave = () => {
+                if (!topicName.trim()) return alert(t('alertNoTopic'));
+                const validWords = words.filter(w => w.q.trim() && w.a.trim());
+                if (validWords.length === 0) return alert(t('alertNoWords'));
+                onSave({ name: topicName.trim(), words: validWords });
+            };
+            return (
+                <div className="min-h-screen p-5 flex flex-col bg-gray-50 dark:bg-gray-900">
+                    <header className="flex justify-between items-center mb-6 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm">
+                        <button onClick={onCancel} className="text-red-500 font-bold">{t('cancel')}</button>
+                        <h2 className="font-bold">{t('newTopic')}</h2>
+                        <button onClick={handleSave} className="text-teal-600 font-bold">{t('done')}</button>
+                    </header>
+                    <div className="space-y-5 flex-1">
+                        <input type="text" placeholder={t('example')} value={topicName} onChange={(e) => setTopicName(e.target.value)} className="w-full p-4 text-lg font-bold bg-white dark:bg-gray-800 rounded-xl outline-none" />
+                        <div className="space-y-3">
+                            {words.map((word, idx) => (
+                                <div key={idx} className="flex gap-2 bg-white dark:bg-gray-800 p-3 rounded-xl relative shadow-sm">
+                                    <div className="flex-1 space-y-2">
+                                        <input type="text" placeholder={t('word')} value={word.q} onChange={e => {const w = [...words]; w[idx].q = e.target.value; setWords(w);}} className="w-full p-2 bg-gray-50 dark:bg-gray-700 rounded-lg outline-none" />
+                                        <input type="text" placeholder={t('translation')} value={word.a} onChange={e => {const w = [...words]; w[idx].a = e.target.value; setWords(w);}} className="w-full p-2 bg-teal-50 dark:bg-teal-900/20 rounded-lg outline-none text-teal-800 dark:text-teal-200" />
+                                    </div>
+                                    {words.length > 1 && <button onClick={() => setWords(words.filter((_, i) => i !== idx))} className="text-gray-300 hover:text-red-500 px-2">✕</button>}
+                                </div>
+                            ))}
+                        </div>
+                        <button onClick={() => setWords([...words, {q: '', a: ''}])} className="w-full py-4 bg-white dark:bg-gray-800 text-teal-600 rounded-2xl font-bold shadow-sm border border-teal-100 dark:border-gray-700">{t('addCard')}</button>
+                    </div>
+                    <Footer />
+                </div>
+            );
+        }
+
+        function FlashcardMode({ t, topic, onRecordAnswer, onBack, Footer }) {
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [isFlipped, setIsFlipped] = useState(false);
+            const [words] = useState(() => [...topic.words].sort(() => Math.random() - 0.5));
+            
+            const currentWord = words[currentIndex];
+            const latestWordData = topic.words.find(w => w.id === currentWord.id) || currentWord;
+            const st = latestWordData.stats || { attempts: 0, correct: 0, wrong: 0 };
+            const cardAcc = st.attempts > 0 ? Math.round((st.correct / st.attempts) * 100) : null;
+
+            const handleAnswer = (isCorrect) => {
+                onRecordAnswer(topic.id, currentWord.id, isCorrect);
+                setIsFlipped(false);
+                setTimeout(() => {
+                    if (currentIndex + 1 >= words.length) { alert(t('completed')); onBack(); } else setCurrentIndex(prev => prev + 1);
+                }, 150);
+            };
+
+            return (
+                <div className="min-h-screen p-6 flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900">
+                    <button onClick={onBack} className="absolute top-6 left-6 text-gray-500 font-bold bg-white/80 dark:bg-gray-800 px-4 py-2 rounded-full shadow-sm">{t('exit')}</button>
+                    <h2 className="text-xl font-bold mb-2 text-gray-700 dark:text-gray-200 mt-10">{topic.name} <span className="text-teal-500">({currentIndex + 1}/{words.length})</span></h2>
+                    <p className="text-xs text-gray-400 mb-6">📅 {t('createdDate')}: {latestWordData.createdAt || topic.createdAt || '—'}
+                        {cardAcc !== null && <span className="ml-2 font-bold text-teal-600">• {t('accuracy')}: {cardAcc}% ({st.correct}/{st.attempts})</span>}
+                    </p>
+                    
+                    <div onClick={() => setIsFlipped(!isFlipped)} className="w-full max-w-sm aspect-[4/5] bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-xl flex items-center justify-center p-8 relative cursor-pointer border border-gray-100 dark:border-gray-700" style={{ perspective: '1500px' }}>
+                        <div className="text-center transition-all duration-500 w-full h-full flex flex-col items-center justify-center" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)', transformStyle: 'preserve-3d' }}>
+                            <p className="text-teal-400 text-xs mb-4 font-bold uppercase absolute top-8" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)' }}>{isFlipped ? t('translation') : t('word')}</p>
+                            <h3 className="text-4xl font-extrabold text-gray-800 dark:text-white break-words w-full" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)' }}>{isFlipped ? currentWord.a : currentWord.q}</h3>
+                        </div>
+                    </div>
+                    <div className="flex gap-4 mt-8 w-full max-w-sm">
+                        <button onClick={() => handleAnswer(false)} className="flex-1 py-4 bg-red-50 dark:bg-red-900/30 text-red-500 dark:text-red-300 rounded-2xl font-bold shadow-sm active:scale-95 transition-transform">{t('dontRemember')}</button>
+                        <button onClick={() => handleAnswer(true)} className="flex-1 py-4 bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-300 rounded-2xl font-bold shadow-sm active:scale-95 transition-transform">{t('remember')}</button>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
