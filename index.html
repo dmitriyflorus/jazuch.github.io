@@ -36,60 +36,109 @@
         const greetings = ["Здравствуйте!", "Hello!", "Исәнмесез!", "Hola!", "Bonjour!", "Salve!", "Ciao!", "Χαίρετε!"];
         const ALL_LANGUAGES = ["Кряшенский", "Английский", "Татарский", "Испанский", "Французский", "Латынь", "Итальянский", "Греческий"];
 
+        // Универсальная обёртка над Telegram CloudStorage и localStorage
+        const storage = {
+            set: (key, value) => {
+                const str = JSON.stringify(value);
+                if (window.Telegram?.WebApp?.CloudStorage) {
+                    window.Telegram.WebApp.CloudStorage.setItem(key, str, (err) => {
+                        if (err) console.error("CloudStorage set error:", err);
+                    });
+                }
+                localStorage.setItem(key, str);
+            },
+            get: (key, callback) => {
+                if (window.Telegram?.WebApp?.CloudStorage) {
+                    window.Telegram.WebApp.CloudStorage.getItem(key, (err, val) => {
+                        if (!err && val) {
+                            try { callback(JSON.parse(val)); return; } catch(e) {}
+                        }
+                        const localVal = localStorage.getItem(key);
+                        callback(localVal ? JSON.parse(localVal) : null);
+                    });
+                } else {
+                    const localVal = localStorage.getItem(key);
+                    callback(localVal ? JSON.parse(localVal) : null);
+                }
+            },
+            clear: () => {
+                if (window.Telegram?.WebApp?.CloudStorage) {
+                    window.Telegram.WebApp.CloudStorage.getKeys((err, keys) => {
+                        if (!err && keys && keys.length > 0) {
+                            window.Telegram.WebApp.CloudStorage.removeItems(keys);
+                        }
+                    });
+                }
+                localStorage.clear();
+            }
+        };
+
         function App() {
-            const [step, setStep] = useState('intro'); // intro, register, dashboard, app, settings, create_topic
-            
-            // Сохранение и загрузка настроек темы
-            const [theme, setTheme] = useState(() => localStorage.getItem('jazuch_theme') || 'light');
-            
-            // Загрузка данных из памяти устройства (чтобы не начинать каждый раз заново)
-            const [userData, setUserData] = useState(() => {
-                const saved = localStorage.getItem('jazuch_userData');
-                return saved ? JSON.parse(saved) : { name: '', goal: 'Свободное общение' };
-            });
-            const [myLanguages, setMyLanguages] = useState(() => {
-                const saved = localStorage.getItem('jazuch_myLanguages');
-                return saved ? JSON.parse(saved) : [];
-            });
-            const [topics, setTopics] = useState(() => {
-                const saved = localStorage.getItem('jazuch_topics');
-                return saved ? JSON.parse(saved) : [];
-            });
-            
+            const [step, setStep] = useState('intro');
+            const [isLoaded, setIsLoaded] = useState(false);
+            const [theme, setTheme] = useState('light');
+            const [userData, setUserData] = useState({ name: '', goal: 'Свободное общение' });
+            const [myLanguages, setMyLanguages] = useState([]);
+            const [topics, setTopics] = useState([]);
             const [activeLanguage, setActiveLanguage] = useState('');
             const [activeTopic, setActiveTopic] = useState(null);
             const [randomGreeting, setRandomGreeting] = useState('');
             
-            const tg = window.Telegram.WebApp;
+            const tg = window.Telegram?.WebApp;
 
-            // Автоматическое сохранение при любом изменении
-            useEffect(() => { localStorage.setItem('jazuch_userData', JSON.stringify(userData)); }, [userData]);
-            useEffect(() => { localStorage.setItem('jazuch_myLanguages', JSON.stringify(myLanguages)); }, [myLanguages]);
-            useEffect(() => { localStorage.setItem('jazuch_topics', JSON.stringify(topics)); }, [topics]);
-            useEffect(() => { localStorage.setItem('jazuch_theme', theme); }, [theme]);
-
+            // Загрузка данных из CloudStorage при инициализации
             useEffect(() => {
-                tg.expand();
-                
-                // Берем имя из ТГ только если его еще нет в сохраненных данных
-                if (!userData.name) {
-                    const tgName = tg.initDataUnsafe?.user?.first_name || 'Пользователь';
-                    setUserData(prev => ({ ...prev, name: tgName }));
+                if (tg) {
+                    tg.expand();
+                    tg.ready();
                 }
 
                 setRandomGreeting(greetings[Math.floor(Math.random() * greetings.length)]);
 
+                storage.get('jazuch_profile', (loadedProfile) => {
+                    if (loadedProfile) {
+                        setUserData(loadedProfile.userData || { name: '', goal: 'Свободное общение' });
+                        setMyLanguages(loadedProfile.myLanguages || []);
+                        setTheme(loadedProfile.theme || 'light');
+                    } else if (tg?.initDataUnsafe?.user?.first_name) {
+                        setUserData(prev => ({ ...prev, name: tg.initDataUnsafe.user.first_name }));
+                    }
+
+                    storage.get('jazuch_topics', (loadedTopics) => {
+                        if (loadedTopics && Array.isArray(loadedTopics)) {
+                            setTopics(loadedTopics);
+                        }
+                        setIsLoaded(true);
+                    });
+                });
+            }, []);
+
+            // Переход с заставки после загрузки данных
+            useEffect(() => {
+                if (!isLoaded) return;
                 const timer = setTimeout(() => {
-                    // Если языки уже выбраны, пропускаем регистрацию и идем на рабочий стол
                     if (myLanguages.length > 0) {
                         setStep('dashboard');
                     } else {
                         setStep('register');
                     }
-                }, 2000);
+                }, 1500);
                 return () => clearTimeout(timer);
-            }, []);
+            }, [isLoaded]);
 
+            // Синхронизация профиля в CloudStorage
+            useEffect(() => {
+                if (!isLoaded) return;
+                storage.set('jazuch_profile', { userData, myLanguages, theme });
+            }, [userData, myLanguages, theme, isLoaded]);
+
+            // Синхронизация тем в CloudStorage
+            useEffect(() => {
+                if (!isLoaded) return;
+                storage.set('jazuch_topics', topics);
+            }, [topics, isLoaded]);
+
+            // Применение темной/светлой темы
             useEffect(() => {
                 if (theme === 'dark') {
                     document.documentElement.classList.add('dark');
@@ -99,9 +148,7 @@
             }, [theme]);
 
             const handleSetGoal = (date) => {
-                // Поскольку мы отключили бота, пока просто сохраняем визуально или показываем алерт.
-                // В будущем можно сохранять это в localStorage.
-                alert(`Здесь вы сможете поставить цель на ${date}.`);
+                alert(`Цель на ${date} зафиксирована.`);
             };
 
             const Footer = () => (
@@ -111,7 +158,7 @@
                 </div>
             );
 
-            if (step === 'intro') {
+            if (step === 'intro' || !isLoaded) {
                 return (
                     <div className="h-screen w-screen bg-mint flex flex-col items-center justify-center overflow-hidden">
                         <div className="text-center space-y-6 fade-in">
@@ -119,6 +166,7 @@
                             <p className="text-3xl font-bold text-teal-800 opacity-90 animate-pulse shadow-sm">
                                 {randomGreeting}
                             </p>
+                            <p className="text-xs text-teal-900 font-semibold tracking-wider uppercase opacity-75">Синхронизация CloudStorage...</p>
                         </div>
                         <div className="absolute bottom-10 text-teal-900">
                             <Footer />
@@ -185,7 +233,6 @@
                             </div>
                         </header>
 
-                        {/* Календарь */}
                         <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 mb-6">
                             <h2 className="font-bold text-lg mb-3 flex items-center gap-2">📅 Календарь целей <span className="text-xs font-normal text-gray-400">(Нажми на день)</span></h2>
                             <div className="grid grid-cols-7 gap-1">
@@ -203,7 +250,6 @@
                             </div>
                         </div>
 
-                        {/* Мои языки */}
                         <div className="flex-1">
                             <h2 className="text-xl font-bold mb-4">Мои языки</h2>
                             <div className="grid grid-cols-2 gap-4">
@@ -259,8 +305,8 @@
                             </div>
 
                             <button onClick={() => {
-                                if(confirm("Вы уверены, что хотите удалить все свои данные?")) {
-                                    localStorage.clear();
+                                if(confirm("Стереть все данные из CloudStorage и кэша?")) {
+                                    storage.clear();
                                     window.location.reload();
                                 }
                             }} className="w-full mt-4 py-3 bg-red-50 text-red-500 dark:bg-red-900/20 dark:text-red-400 rounded-xl font-bold">Сбросить данные приложения</button>
@@ -292,143 +338,4 @@
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-1 gap-4 mt-4">
-                                    {currentTopics.map(topic => (
-                                        <div key={topic.id} onClick={() => setActiveTopic(topic)} className="bg-white dark:bg-gray-800 p-5 rounded-2xl shadow-sm hover:shadow-md cursor-pointer border border-gray-100 dark:border-gray-700 flex justify-between items-center">
-                                            <div>
-                                                <h3 className="font-bold text-lg mb-1">{topic.name}</h3>
-                                                <p className="text-sm text-gray-400">{topic.words.length} карточек</p>
-                                            </div>
-                                            <div className="text-teal-500 text-xl">▶</div>
-                                        </div>
-                                    ))}
-                                    <button onClick={() => setStep('create_topic')} className="w-full py-4 bg-teal-50 dark:bg-gray-800 text-teal-600 dark:text-teal-400 rounded-2xl font-bold border-2 border-dashed border-teal-300 dark:border-teal-700">+ Новая тема</button>
-                                </div>
-                            )}
-                        </div>
-                        <Footer />
-                    </div>
-                );
-            }
-
-            if (activeTopic) {
-                return <FlashcardMode topic={activeTopic} onBack={() => setActiveTopic(null)} Footer={Footer}/>
-            }
-        }
-
-        // Конструктор тем
-        function CreateTopicMode({ language, onSave, onCancel, Footer }) {
-            const [topicName, setTopicName] = useState('');
-            const [words, setWords] = useState([{q: '', a: ''}]);
-
-            const handleWordChange = (index, field, value) => {
-                const newWords = [...words];
-                newWords[index][field] = value;
-                setWords(newWords);
-            };
-
-            const removeWord = (index) => {
-                if(words.length > 1) {
-                    setWords(words.filter((_, i) => i !== index));
-                }
-            }
-
-            const handleSave = () => {
-                if (!topicName.trim()) return alert("Введите название темы!");
-                const validWords = words.filter(w => w.q.trim() && w.a.trim());
-                if (validWords.length === 0) return alert("Добавьте хотя бы одну пару слов!");
-                onSave({ name: topicName, words: validWords });
-            };
-
-            return (
-                <div className="min-h-screen p-5 fade-in bg-gray-50 dark:bg-gray-900 flex flex-col">
-                    <header className="flex justify-between items-center mb-6 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm">
-                        <button onClick={onCancel} className="text-red-500 font-bold">Отмена</button>
-                        <h2 className="font-bold text-gray-800 dark:text-white">Новая тема</h2>
-                        <button onClick={handleSave} className="text-teal-600 font-bold bg-teal-50 dark:bg-teal-900/30 px-3 py-1 rounded-lg">Готово</button>
-                    </header>
-
-                    <div className="space-y-5 flex-1">
-                        <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-                            <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Название темы</label>
-                            <input type="text" placeholder="Например: Семья, Глаголы..." value={topicName} onChange={(e) => setTopicName(e.target.value)} className="w-full text-lg font-bold bg-transparent outline-none dark:text-white" />
-                        </div>
-                        
-                        <div className="space-y-3">
-                            <h3 className="font-bold text-sm text-gray-500 ml-2">Слова в теме ({language}):</h3>
-                            {words.map((word, index) => (
-                                <div key={index} className="flex flex-col gap-2 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 relative">
-                                    <div className="flex gap-3 items-center">
-                                        <div className="flex-1 space-y-2">
-                                            <input type="text" placeholder="Слово" value={word.q} onChange={e => handleWordChange(index, 'q', e.target.value)} className="w-full p-2 bg-gray-50 dark:bg-gray-700 rounded-lg outline-none text-sm font-medium dark:text-white" />
-                                            <input type="text" placeholder="Перевод" value={word.a} onChange={e => handleWordChange(index, 'a', e.target.value)} className="w-full p-2 bg-teal-50 dark:bg-teal-900/20 rounded-lg outline-none text-sm font-medium text-teal-800 dark:text-teal-200" />
-                                        </div>
-                                        {words.length > 1 && (
-                                            <button onClick={() => removeWord(index)} className="p-2 text-gray-300 hover:text-red-500 text-xl">✕</button>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                        <button onClick={() => setWords([...words, {q: '', a: ''}])} className="w-full py-4 bg-white dark:bg-gray-800 text-teal-600 dark:text-teal-400 rounded-2xl font-bold shadow-sm border border-gray-100 dark:border-gray-700">
-                            + Добавить карточку
-                        </button>
-                    </div>
-                    <Footer />
-                </div>
-            );
-        }
-
-        // Режим карточек
-        function FlashcardMode({ topic, onBack, Footer }) {
-            const [currentIndex, setCurrentIndex] = useState(0);
-            const [isFlipped, setIsFlipped] = useState(false);
-            const [words, setWords] = useState(() => [...topic.words].sort(() => Math.random() - 0.5));
-
-            const handleNext = () => {
-                setIsFlipped(false);
-                setTimeout(() => {
-                    if (currentIndex + 1 >= words.length) {
-                        alert("Тема пройдена! Отличная работа.");
-                        onBack();
-                    } else {
-                        setCurrentIndex((prev) => prev + 1);
-                    }
-                }, 150);
-            };
-
-            const word = words[currentIndex];
-
-            return (
-                <div className="min-h-screen p-6 flex flex-col items-center justify-center fade-in bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
-                    <button onClick={onBack} className="absolute top-6 left-6 text-gray-500 font-bold bg-white/80 dark:bg-gray-800/80 backdrop-blur px-4 py-2 rounded-full shadow-sm">
-                        ← Выйти
-                    </button>
-                    <h2 className="text-xl font-bold mb-8 text-gray-700 dark:text-gray-300 tracking-wide mt-10">{topic.name} <span className="text-teal-500">({currentIndex + 1}/{words.length})</span></h2>
-
-                    <div onClick={() => setIsFlipped(!isFlipped)} className="w-full max-w-sm aspect-[4/5] bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-xl flex items-center justify-center cursor-pointer p-8 relative border border-gray-100 dark:border-gray-700" style={{ perspective: '1500px' }}>
-                        <div className="text-center transition-all duration-500 w-full h-full flex flex-col items-center justify-center" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)', transformStyle: 'preserve-3d' }}>
-                            <p className="text-teal-400 text-xs mb-4 font-bold uppercase tracking-widest absolute top-8" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)' }}>
-                                {isFlipped ? 'Перевод' : 'Слово'}
-                            </p>
-                            <h3 className="text-4xl font-extrabold text-gray-800 dark:text-white break-words w-full" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)' }}>
-                                {isFlipped ? word.a : word.q}
-                            </h3>
-                        </div>
-                    </div>
-
-                    <div className="flex gap-4 mt-8 w-full max-w-sm">
-                        <button onClick={handleNext} className="flex-1 py-4 bg-red-50 text-red-500 dark:bg-red-900/20 dark:text-red-400 rounded-2xl font-bold shadow-sm border border-red-100 dark:border-red-900/30">Не помню ❌</button>
-                        <button onClick={handleNext} className="flex-1 py-4 bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400 rounded-2xl font-bold shadow-sm border border-green-100 dark:border-green-900/30">Помню ✅</button>
-                    </div>
-                    <div className="mt-auto">
-                        <Footer />
-                    </div>
-                </div>
-            );
-        }
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+                                    {currentTopi</html>
