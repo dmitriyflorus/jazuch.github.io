@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ЯзУч - Приложение</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: { mint: '#98FF98' }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Nunito', sans-serif; }
+        .fade-in { animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 transition-colors duration-300">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const tg = window.Telegram.WebApp;
+
+        // Универсальная система хранения (Cloud Storage Телеграма + LocalStorage как бэкап)
+        const AppStorage = {
+            save: (key, value) => {
+                const strVal = typeof value === 'string' ? value : JSON.stringify(value);
+                try {
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) {
+                        tg.CloudStorage.setItem(key, strVal);
+                    }
+                    localStorage.setItem(key, strVal); // Дублируем локально для надежности
+                } catch (e) { console.error("Save error", e); }
+            },
+            loadAll: (callback) => {
+                const keys = ['jazuch_userData', 'jazuch_myLanguages', 'jazuch_topics', 'jazuch_theme'];
+                const localFallback = () => {
+                    const values = {};
+                    keys.forEach(k => { values[k] = localStorage.getItem(k); });
+                    callback(values);
+                };
+
+                try {
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) {
+                        tg.CloudStorage.getItems(keys, (error, values) => {
+                            if (error || !values) {
+                                localFallback();
+                            } else {
+                                // Если в облаке пусто, но есть локально (миграция старых данных)
+                                keys.forEach(k => {
+                                    if (!values[k] && localStorage.getItem(k)) {
+                                        values[k] = localStorage.getItem(k);
+                                        tg.CloudStorage.setItem(k, values[k]);
+                                    }
+                                });
+                                callback(values);
+                            }
+                        });
+                    } else {
+                        localFallback();
+                    }
+                } catch(e) {
+                    localFallback();
+                }
+            },
+            clear: (callback) => {
+                try {
+                    localStorage.clear();
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) {
+                        tg.CloudStorage.removeItems(['jazuch_userData', 'jazuch_myLanguages', 'jazuch_topics', 'jazuch_theme'], callback);
+                    } else {
+                        callback();
+                    }
+                } catch(e) { callback(); }
+            }
+        };
+
+        const greetings = ["Здравствуйте!", "Hello!", "Исәнмесез!", "Hola!", "Bonjour!", "Salve!", "Ciao!", "Χαίρετε!"];
+        const ALL_LANGUAGES = ["Кряшенский", "Английский", "Татарский", "Испанский", "Французский", "Латынь", "Итальянский", "Греческий"];
+
+        function App() {
+            const [step, setStep] = useState('intro'); // intro, register, dashboard, app, settings, create_topic
+            const [isLoading, setIsLoading] = useState(true);
+            
+            // Состояния теперь пустые, заполнятся из CloudStorage при запуске
+            const [theme, setTheme] = useState('light');
+            const [userData, setUserData] = useState({ name: '', goal: 'Свободное общение' });
+            const [myLanguages, setMyLanguages] = useState([]);
+            const [topics, setTopics] = useState([]);
+            
+            const [activeLanguage, setActiveLanguage] = useState('');
+            const [activeTopic, setActiveTopic] = useState(null);
+            const [randomGreeting, setRandomGreeting] = useState('');
+
+            // Автоматическое сохранение при любом изменении (только если данные уже загрузились)
+            useEffect(() => { if (!isLoading) AppStorage.save('jazuch_userData', userData); }, [userData, isLoading]);
+            useEffect(() => { if (!isLoading) AppStorage.save('jazuch_myLanguages', myLanguages); }, [myLanguages, isLoading]);
+            useEffect(() => { if (!isLoading) AppStorage.save('jazuch_topics', topics); }, [topics, isLoading]);
+            useEffect(() => { if (!isLoading) AppStorage.save('jazuch_theme', theme); }, [theme, isLoading]);
+
+            useEffect(() => {
+                tg.expand();
+                setRandomGreeting(greetings[Math.floor(Math.random() * greetings.length)]);
+
+                // Загружаем данные из облака ТГ
+                AppStorage.loadAll((values) => {
+                    if (values.jazuch_theme) setTheme(values.jazuch_theme);
+                    
+                    let loadedLanguages = [];
+                    if (values.jazuch_myLanguages) {
+                        loadedLanguages = JSON.parse(values.jazuch_myLanguages);
+                        setMyLanguages(loadedLanguages);
+                    }
+                    
+                    if (values.jazuch_userData) {
+                        setUserData(JSON.parse(values.jazuch_userData));
+                    } else {
+                        const tgName = tg.initDataUnsafe?.user?.first_name || 'Пользователь';
+                        setUserData({ name: tgName, goal: 'Свободное общение' });
+                    }
+                    
+                    if (values.jazuch_topics) setTopics(JSON.parse(values.jazuch_topics));
+                    
+                    setIsLoading(false);
+
+                    // После задержки анимации переходим на нужный экран
+                    setTimeout(() => {
+                        if (loadedLanguages.length > 0) {
+                            setStep('dashboard');
+                        } else {
+                            setStep('register');
+                        }
+                    }, 2000);
+                });
+            }, []);
+
+            useEffect(() => {
+                if (theme === 'dark') {
+                    document.documentElement.classList.add('dark');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                }
+            }, [theme]);
+
+            const handleSetGoal = (date) => {
+                // Поскольку мы отключили бота, пока просто сохраняем визуально или показываем алерт.
+                // В будущем можно сохранять это в localStorage.
+                alert(`Здесь вы сможете поставить цель на ${date}.`);
+            };
+
+            const Footer = () => (
+                <div className="mt-8 text-center pb-6 opacity-70">
+                    <p className="font-bold text-xs">«Телляргя сӧйӧӱ белян»</p>
+                    <p className="text-xs italic">«С любовью к языкам»</p>
+                </div>
+            );
+
+            if (step === 'intro') {
+                return (
+                    <div className="h-screen w-screen bg-mint flex flex-col items-center justify-center overflow-hidden">
+                        <div className="text-center space-y-6 fade-in">
+                            <h1 className="text-5xl font-extrabold text-teal-900 drop-shadow-xl tracking-wide">ЯзУч</h1>
+                            <p className="text-3xl font-bold text-teal-800 opacity-90 animate-pulse shadow-sm">
+                                {randomGreeting}
+                            </p>
+                        </div>
+                        <div className="absolute bottom-10 text-teal-900">
+                            <Footer />
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'register') {
+                return (
+                    <div className="min-h-screen p-6 flex flex-col items-center justify-center fade-in bg-gradient-to-br from-teal-50 to-mint dark:from-gray-900 dark:to-teal-900">
+                        <div className="w-full max-w-md bg-white/80 dark:bg-gray-800/80 backdrop-blur-lg rounded-3xl shadow-2xl p-8 space-y-6 border border-white/20 dark:border-gray-700">
+                            <h2 className="text-2xl font-bold text-center bg-clip-text text-transparent bg-gradient-to-r from-teal-600 to-green-500">Добро пожаловать</h2>
+                            
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-gray-600 dark:text-gray-300">Ваше имя</label>
+                                <input type="text" value={userData.name} onChange={(e) => setUserData({...userData, name: e.target.value})} className="w-full p-3 bg-white dark:bg-gray-700 rounded-xl outline-none focus:ring-2 focus:ring-teal-400" />
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-gray-600 dark:text-gray-300">Какой язык будем изучать?</label>
+                                <select 
+                                    value={activeLanguage}
+                                    onChange={(e) => setActiveLanguage(e.target.value)}
+                                    className="w-full p-3 bg-white dark:bg-gray-700 rounded-xl outline-none focus:ring-2 focus:ring-teal-400">
+                                    <option value="">Выберите язык...</option>
+                                    {ALL_LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
+                                </select>
+                            </div>
+
+                            <button 
+                                onClick={() => {
+                                    if(activeLanguage) {
+                                        setMyLanguages([activeLanguage]);
+                                        setStep('dashboard');
+                                    } else {
+                                        alert("Пожалуйста, выберите язык");
+                                    }
+                                }} 
+                                className="w-full py-4 bg-gradient-to-r from-teal-400 to-teal-500 hover:from-teal-500 text-white rounded-xl font-bold text-lg shadow-lg active:scale-95">
+                                Войти в систему
+                            </button>
+                        </div>
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (step === 'dashboard') {
+                const today = new Date();
+                const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+                const daysArray = Array.from({length: daysInMonth}, (_, i) => i + 1);
+
+                return (
+                    <div className="min-h-screen p-5 pb-20 fade-in bg-gray-50 dark:bg-gray-900 flex flex-col">
+                        <header className="flex justify-between items-center mb-6 pt-2">
+                            <div>
+                                <h1 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-teal-500 to-green-500">ЯзУч</h1>
+                                <p className="text-gray-500 font-medium text-sm">С возвращением, {userData.name}!</p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="p-3 bg-white dark:bg-gray-800 rounded-full shadow-md text-xl">{theme === 'light' ? '🌙' : '☀️'}</button>
+                                <button onClick={() => setStep('settings')} className="p-3 bg-white dark:bg-gray-800 rounded-full shadow-md text-xl">⚙️</button>
+                            </div>
+                        </header>
+
+                        {/* Календарь */}
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 mb-6">
+                            <h2 className="font-bold text-lg mb-3 flex items-center gap-2">📅 Календарь целей <span className="text-xs font-normal text-gray-400">(Нажми на день)</span></h2>
+                            <div className="grid grid-cols-7 gap-1">
+                                {daysArray.map(day => {
+                                    const dateStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                    const isToday = day === today.getDate();
+                                    return (
+                                        <div key={day} onClick={() => handleSetGoal(dateStr)} 
+                                             className={`aspect-square flex items-center justify-center rounded-lg text-sm font-semibold cursor-pointer transition-colors
+                                             ${isToday ? 'bg-teal-500 text-white shadow-md' : 'bg-gray-50 dark:bg-gray-700 hover:bg-teal-100 dark:hover:bg-teal-900'}`}>
+                                            {day}
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Мои языки */}
+                        <div className="flex-1">
+                            <h2 className="text-xl font-bold mb-4">Мои языки</h2>
+                            <div className="grid grid-cols-2 gap-4">
+                                {myLanguages.length === 0 && (
+                                    <p className="col-span-2 text-gray-500 text-sm">У вас пока нет добавленных языков.</p>
+                                )}
+                                {myLanguages.map(lang => (
+                                    <div key={lang} onClick={() => { setActiveLanguage(lang); setStep('app'); }} 
+                                         className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm hover:shadow-md cursor-pointer border border-gray-100 dark:border-gray-700 relative overflow-hidden">
+                                        <div className="text-3xl mb-2">🌍</div>
+                                        <h3 className="font-bold text-lg">{lang}</h3>
+                                        <p className="text-xs text-gray-500">{topics.filter(t => t.language === lang).length} тем</p>
+                                    </div>
+                                ))}
+                                <div onClick={() => setStep('settings')} className="bg-teal-50/50 dark:bg-gray-800 p-5 rounded-3xl flex flex-col items-center justify-center border-2 border-dashed border-teal-300 dark:border-teal-700 cursor-pointer">
+                                    <span className="text-2xl mb-1 text-teal-400">+</span>
+                                    <span className="text-teal-600 dark:text-teal-400 font-bold text-xs text-center">Добавить язык</span>
+                                </div>
+                            </div>
+                        </div>
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (step === 'settings') {
+                return (
+                    <div className="min-h-screen p-6 fade-in flex flex-col bg-gray-50 dark:bg-gray-900">
+                        <button onClick={() => setStep('dashboard')} className="mb-6 text-teal-600 dark:text-teal-400 font-bold flex items-center gap-2">← На рабочий стол</button>
+                        <h2 className="text-3xl font-extrabold mb-8 text-gray-800 dark:text-white">⚙️ Настройки</h2>
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-lg border border-gray-100 dark:border-gray-700 space-y-6 flex-1">
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-gray-500">Имя профиля</label>
+                                <input type="text" value={userData.name} onChange={(e) => setUserData({...userData, name: e.target.value})} className="w-full p-3 bg-gray-100 dark:bg-gray-700 rounded-xl outline-none" />
+                            </div>
+                            
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-gray-500">Добавить новый язык</label>
+                                <select 
+                                    value={''} 
+                                    onChange={(e) => { 
+                                        const newLang = e.target.value;
+                                        if (newLang && !myLanguages.includes(newLang)) {
+                                            setMyLanguages([...myLanguages, newLang]);
+                                        }
+                                        setActiveLanguage(newLang); 
+                                        setStep('app'); 
+                                    }} 
+                                    className="w-full p-3 bg-teal-50 text-teal-800 dark:bg-teal-900/30 dark:text-teal-200 rounded-xl outline-none font-bold border-2 border-teal-200 dark:border-teal-700">
+                                    <option value="">Выберите язык для добавления...</option>
+                                    {ALL_LANGUAGES.map(l => <option key={l} value={l} disabled={myLanguages.includes(l)}>{l}</option>)}
+                                </select>
+                            </div>
+
+                            <button onClick={() => {
+                                if(confirm("Вы уверены, что хотите удалить все свои данные? (Включая облако Телеграма)")) {
+                                    AppStorage.clear(() => {
+                                        window.location.reload();
+                                    });
+                                }
+                            }} className="w-full mt-4 py-3 bg-red-50 text-red-500 dark:bg-red-900/20 dark:text-red-400 rounded-xl font-bold">Сбросить данные приложения</button>
+                        </div>
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (step === 'create_topic') {
+                return <CreateTopicMode language={activeLanguage} onSave={(newTopic) => { setTopics([...topics, { ...newTopic, id: Date.now(), language: activeLanguage }]); setStep('app'); }} onCancel={() => setStep('app')} Footer={Footer}/>
+            }
+
+            if (step === 'app' && !activeTopic) {
+                const currentTopics = topics.filter(t => t.language === activeLanguage);
+                return (
+                    <div className="min-h-screen p-5 pb-20 fade-in bg-gray-50 dark:bg-gray-900 flex flex-col">
+                        <header className="flex justify-between items-center mb-6 pt-2">
+                            <button onClick={() => setStep('dashboard')} className="text-teal-600 font-bold">← Рабочий стол</button>
+                            <h1 className="text-xl font-bold">{activeLanguage}</h1>
+                        </header>
+
+                        <div className="flex-1">
+                            {currentTopics.length === 0 ? (
+                                <div className="text-center p-8 bg-white dark:bg-gray-800 rounded-3xl border border-teal-100 dark:border-gray-700 shadow-sm mt-4">
+                                    <div className="text-4xl mb-4">🗂️</div>
+                                    <p className="text-gray-500 dark:text-gray-400 mb-6">Здесь пока пусто.</p>
+                                    <button onClick={() => setStep('create_topic')} className="px-6 py-3 bg-teal-500 text-white font-bold rounded-xl shadow-lg">Создать тему</button>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 gap-4 mt-4">
+                                    {currentTopics.map(topic => (
+                                        <div key={topic.id} onClick={() => setActiveTopic(topic)} className="bg-white dark:bg-gray-800 p-5 rounded-2xl shadow-sm hover:shadow-md cursor-pointer border border-gray-100 dark:border-gray-700 flex justify-between items-center">
+                                            <div>
+                                                <h3 className="font-bold text-lg mb-1">{topic.name}</h3>
+                                                <p className="text-sm text-gray-400">{topic.words.length} карточек</p>
+                                            </div>
+                                            <div className="text-teal-500 text-xl">▶</div>
+                                        </div>
+                                    ))}
+                                    <button onClick={() => setStep('create_topic')} className="w-full py-4 bg-teal-50 dark:bg-gray-800 text-teal-600 dark:text-teal-400 rounded-2xl font-bold border-2 border-dashed border-teal-300 dark:border-teal-700">+ Новая тема</button>
+                                </div>
+                            )}
+                        </div>
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (activeTopic) {
+                return <FlashcardMode topic={activeTopic} onBack={() => setActiveTopic(null)} Footer={Footer}/>
+            }
+        }
+
+        // Конструктор тем
+        function CreateTopicMode({ language, onSave, onCancel, Footer }) {
+            const [topicName, setTopicName] = useState('');
+            const [words, setWords] = useState([{q: '', a: ''}]);
+
+            const handleWordChange = (index, field, value) => {
+                const newWords = [...words];
+                newWords[index][field] = value;
+                setWords(newWords);
+            };
+
+            const removeWord = (index) => {
+                if(words.length > 1) {
+                    setWords(words.filter((_, i) => i !== index));
+                }
+            }
+
+            const handleSave = () => {
+                if (!topicName.trim()) return alert("Введите название темы!");
+                const validWords = words.filter(w => w.q.trim() && w.a.trim());
+                if (validWords.length === 0) return alert("Добавьте хотя бы одну пару слов!");
+                onSave({ name: topicName, words: validWords });
+            };
+
+            return (
+                <div className="min-h-screen p-5 fade-in bg-gray-50 dark:bg-gray-900 flex flex-col">
+                    <header className="flex justify-between items-center mb-6 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm">
+                        <button onClick={onCancel} className="text-red-500 font-bold">Отмена</button>
+                        <h2 className="font-bold text-gray-800 dark:text-white">Новая тема</h2>
+                        <button onClick={handleSave} className="text-teal-600 font-bold bg-teal-50 dark:bg-teal-900/30 px-3 py-1 rounded-lg">Готово</button>
+                    </header>
+
+                    <div className="space-y-5 flex-1">
+                        <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+                            <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Название темы</label>
+                            <input type="text" placeholder="Например: Семья, Глаголы..." value={topicName} onChange={(e) => setTopicName(e.target.value)} className="w-full text-lg font-bold bg-transparent outline-none dark:text-white" />
+                        </div>
+                        
+                        <div className="space-y-3">
+                            <h3 className="font-bold text-sm text-gray-500 ml-2">Слова в теме ({language}):</h3>
+                            {words.map((word, index) => (
+                                <div key={index} className="flex flex-col gap-2 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 relative">
+                                    <div className="flex gap-3 items-center">
+                                        <div className="flex-1 space-y-2">
+                                            <input type="text" placeholder="Слово" value={word.q} onChange={e => handleWordChange(index, 'q', e.target.value)} className="w-full p-2 bg-gray-50 dark:bg-gray-700 rounded-lg outline-none text-sm font-medium dark:text-white" />
+                                            <input type="text" placeholder="Перевод" value={word.a} onChange={e => handleWordChange(index, 'a', e.target.value)} className="w-full p-2 bg-teal-50 dark:bg-teal-900/20 rounded-lg outline-none text-sm font-medium text-teal-800 dark:text-teal-200" />
+                                        </div>
+                                        {words.length > 1 && (
+                                            <button onClick={() => removeWord(index)} className="p-2 text-gray-300 hover:text-red-500 text-xl">✕</button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <button onClick={() => setWords([...words, {q: '', a: ''}])} className="w-full py-4 bg-white dark:bg-gray-800 text-teal-600 dark:text-teal-400 rounded-2xl font-bold shadow-sm border border-gray-100 dark:border-gray-700">
+                            + Добавить карточку
+                        </button>
+                    </div>
+                    <Footer />
+                </div>
+            );
+        }
+
+        // Режим карточек
+        function FlashcardMode({ topic, onBack, Footer }) {
+            const [currentIndex, setCurrentIndex] = useState(0);
+            const [isFlipped, setIsFlipped] = useState(false);
+            const [words, setWords] = useState(() => [...topic.words].sort(() => Math.random() - 0.5));
+
+            const handleNext = () => {
+                setIsFlipped(false);
+                setTimeout(() => {
+                    if (currentIndex + 1 >= words.length) {
+                        alert("Тема пройдена! Отличная работа.");
+                        onBack();
+                    } else {
+                        setCurrentIndex((prev) => prev + 1);
+                    }
+                }, 150);
+            };
+
+            const word = words[currentIndex];
+
+            return (
+                <div className="min-h-screen p-6 flex flex-col items-center justify-center fade-in bg-gradient-to-b from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
+                    <button onClick={onBack} className="absolute top-6 left-6 text-gray-500 font-bold bg-white/80 dark:bg-gray-800/80 backdrop-blur px-4 py-2 rounded-full shadow-sm">
+                        ← Выйти
+                    </button>
+                    <h2 className="text-xl font-bold mb-8 text-gray-700 dark:text-gray-300 tracking-wide mt-10">{topic.name} <span className="text-teal-500">({currentIndex + 1}/{words.length})</span></h2>
+
+                    <div onClick={() => setIsFlipped(!isFlipped)} className="w-full max-w-sm aspect-[4/5] bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-xl flex items-center justify-center cursor-pointer p-8 relative border border-gray-100 dark:border-gray-700" style={{ perspective: '1500px' }}>
+                        <div className="text-center transition-all duration-500 w-full h-full flex flex-col items-center justify-center" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)', transformStyle: 'preserve-3d' }}>
+                            <p className="text-teal-400 text-xs mb-4 font-bold uppercase tracking-widest absolute top-8" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)' }}>
+                                {isFlipped ? 'Перевод' : 'Слово'}
+                            </p>
+                            <h3 className="text-4xl font-extrabold text-gray-800 dark:text-white break-words w-full" style={{ transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0)' }}>
+                                {isFlipped ? word.a : word.q}
+                            </h3>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-4 mt-8 w-full max-w-sm">
+                        <button onClick={handleNext} className="flex-1 py-4 bg-red-50 text-red-500 dark:bg-red-900/20 dark:text-red-400 rounded-2xl font-bold shadow-sm border border-red-100 dark:border-red-900/30">Не помню ❌</button>
+                        <button onClick={handleNext} className="flex-1 py-4 bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400 rounded-2xl font-bold shadow-sm border border-green-100 dark:border-green-900/30">Помню ✅</button>
+                    </div>
+                    <div className="mt-auto">
+                        <Footer />
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
