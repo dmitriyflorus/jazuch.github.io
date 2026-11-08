@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ЯзУч - Приложение</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: { colors: { mint: '#98FF98' } } }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Nunito', sans-serif; }
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 transition-colors duration-300">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const tg = window.Telegram.WebApp;
+        const ADMIN_ID = 1311119781;
+
+        const getDateStr = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+        // Умное хранилище с защитой от переполнения лимитов Telegram (исправляет баг с 11+ карточками)
+        const AppStorage = {
+            save: (key, value) => {
+                const strVal = typeof value === 'string' ? value : JSON.stringify(value);
+                try { localStorage.setItem(key, strVal); } catch (e) {}
+                try {
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) {
+                        if (key === 'jazuch_topics') {
+                            const chunkSize = 2500;
+                            const chunks = Math.ceil(strVal.length / chunkSize);
+                            tg.CloudStorage.setItem('jazuch_topics_chunks', String(chunks));
+                            for (let i = 0; i < chunks; i++) {
+                                tg.CloudStorage.setItem(`jazuch_topics_${i}`, strVal.slice(i * chunkSize, (i + 1) * chunkSize));
+                            }
+                            if (strVal.length < 3500) tg.CloudStorage.setItem(key, strVal);
+                        } else {
+                            tg.CloudStorage.setItem(key, strVal);
+                        }
+                    }
+                } catch (e) {}
+            },
+            loadAll: (callback) => {
+                const baseKeys = ['jazuch_userData', 'jazuch_myLanguages', 'jazuch_topics', 'jazuch_theme', 'jazuch_isRegistered', 'jazuch_goals', 'jazuch_studyTime', 'jazuch_streakData', 'jazuch_topics_chunks'];
+                const chunkKeys = Array.from({length: 15}, (_, i) => `jazuch_topics_${i}`);
+                const allKeys = [...baseKeys, ...chunkKeys];
+                
+                const localFallback = () => {
+                    const values = {};
+                    baseKeys.forEach(k => { values[k] = localStorage.getItem(k); });
+                    callback(values);
+                };
+                try {
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) {
+                        tg.CloudStorage.getItems(allKeys, (error, values) => {
+                            if (error || !values) localFallback();
+                            else {
+                                const numChunks = parseInt(values['jazuch_topics_chunks'] || '0', 10);
+                                if (numChunks > 0) {
+                                    let fullTopics = '';
+                                    for (let i = 0; i < numChunks; i++) {
+                                        fullTopics += (values[`jazuch_topics_${i}`] || '');
+                                    }
+                                    if (fullTopics) {
+                                        try {
+                                            JSON.parse(fullTopics);
+                                            values['jazuch_topics'] = fullTopics;
+                                        } catch (e) {}
+                                    }
+                                }
+                                baseKeys.forEach(k => {
+                                    const localVal = localStorage.getItem(k);
+                                    if (k === 'jazuch_topics' && localVal) {
+                                        if (!values[k] || localVal.length > values[k].length) {
+                                            try { JSON.parse(localVal); values[k] = localVal; } catch(e){}
+                                        }
+                                    } else if (!values[k] && localVal) {
+                                        values[k] = localVal;
+                                        tg.CloudStorage.setItem(k, values[k]);
+                                    }
+                                });
+                                callback(values);
+                            }
+                        });
+                    } else localFallback();
+                } catch(e) { localFallback(); }
+            },
+            clear: (callback) => {
+                try {
+                    localStorage.clear();
+                    if (tg.isVersionAtLeast('6.9') && tg.CloudStorage) {
+                        const baseKeys = ['jazuch_userData', 'jazuch_myLanguages', 'jazuch_topics', 'jazuch_theme', 'jazuch_isRegistered', 'jazuch_goals', 'jazuch_studyTime', 'jazuch_streakData', 'jazuch_topics_chunks'];
+                        const chunkKeys = Array.from({length: 15}, (_, i) => `jazuch_topics_${i}`);
+                        tg.CloudStorage.removeItems([...baseKeys, ...chunkKeys], callback);
+                    } else callback();
+                } catch(e) { callback(); }
+            }
+        };
+
+        const translations = {
+            ru: {
+                welcome: "Добро пожаловать", yourName: "Ваше имя", login: "Войти в систему", goalCalendar: "Календарь целей", clickDay: "Нажми на день для создания цели", myLangs: "Мои языки", addLang: "Добавить язык", settings: "Настройки", uiLang: "Язык интерфейса", resetData: "Сбросить данные приложения", resetConfirm: "Удалить все данные? Вам придётся заново ввести /start в боте.", empty: "Здесь пока пусто.", createTopic: "Создать тему", editTopic: "✏️ Редактировать", newTopic: "Новая тема", cards: "карточек", cancel: "Отмена", done: "Готово", topicName: "Название темы", word: "Слово", translation: "Перевод", addCard: "+ Добавить карточку", exit: "← Выйти", dontRemember: "Не помню ❌", remember: "Помню ✅", completed: "Тема пройдена! Отличная работа.", back: "← Назад", support: "Написать в поддержку", sendClose: "Отправить", goalSet: "Добавить", goalText: "Текст цели", saveGoal: "Сохранить", syncBot: "💾 Сохранить изменения", adminPanel: "Панель Администратора", adminTickets: "Обращения", reply: "Ответить", markRead: "Прочитано ✓", faqBtn: "ЧаВо (Инструкция)",
+                sendDataError: "Для отправки данных откройте ЯзУч через кнопку меню внизу чата.",
+                faqText: "🧠 Как учить эффективно? (Плюшки ЯзУча)\n\nМы используем методику интервального повторения Эббингауза!\n\n1. Учите слова в специальном режиме списка и засекайте время.\n2. Откладывайте те слова, которые вы уже запомнили (кнопка 'Помню').\n3. Делайте упор на те, что даются сложно (кнопка 'Не помню').\n4. Наш умный бот сам пришлёт вам напоминания по кривой забывания (через 1, 3, 7, 14 и 30 дней), чтобы слова закрепились в долгосрочной памяти!\n\nИспользуйте календарь для установки целей, огонёк для мотивации, а статистику — для отслеживания прогресса!",
+                statsBtn: "Статистика", deleteLangConfirm: "Вы уверены, что хотите убрать этот язык с рабочего стола?", accuracy: "Точность", attempts: "Раз пройдено", resetStats: "Сбросить", resetAllStats: "Сбросить статистику языка", created: "Создано", botReminders: "🤖 Умные напоминания от бота (Интервальное повторение)", saveChanges: "Сохранить изменения", onboardingBtn: "Всё понятно, начать! 🚀",
+                deleteTopicConfirm: "Вы точно хотите удалить тему? После удаления она будет доступна в корзине.",
+                trashBin: "🗑️ Корзина", trashEmpty: "Корзина пуста", restore: "Восстановить", daysLeft: "дн. до удаления", trashInfo: "Темы хранятся 30 дней, затем удаляются навсегда.",
+                learnWords: "📖 Учить", studyModeTitle: "Режим учёбы", timerText: "Время изучения", studyTimeStats: "Время учёбы по дням", sec: "сек.", min: "мин.", hrs: "ч.",
+                shareBtn: "📢 Поделиться приложением", shareText: "Привет! Мне тут одно приложение понравилось, с помощью которого языки можно учить. Вот ссылка, тоже попробуй\nt.me/jazuchbot", shareCopied: "Текст с ссылкой успешно скопирован!",
+                streakTitle: "Огонёк активности", streakDays: "дней подряд", takeFreeze: "❄️ Взять заморозку", freezesLeft: "Доступно в этом месяце", freezeUsed: "Заморозка на сегодня активна!", noFreezes: "Заморозки на этот месяц закончились", daysShort: ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
+                regDateLabel: "Дата регистрации", months: ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"],
+                wordsTab: "Слова", timeTab: "Время", totalTime: "Всего времени"
+            },
+            en: {
+                welcome: "Welcome", yourName: "Your Name", login: "Login", goalCalendar: "Goals Calendar", clickDay: "Click a day to add a goal", myLangs: "My Languages", addLang: "Add Language", settings: "Settings", uiLang: "UI Language", resetData: "Reset App Data", resetConfirm: "Delete all data? You will need to type /start in the bot again.", empty: "It's empty here.", createTopic: "Create Topic", editTopic: "✏️ Edit Topic", newTopic: "New Topic", cards: "cards", cancel: "Cancel", done: "Done", topicName: "Topic Name", word: "Word", translation: "Translation", addCard: "+ Add Card", exit: "← Exit", dontRemember: "Don't Remember ❌", remember: "Remember ✅", completed: "Topic completed! Great job.", back: "← Back", support: "Contact Support", sendClose: "Send", goalSet: "Add", goalText: "Goal text", saveGoal: "Save", syncBot: "💾 Save Changes", adminPanel: "Admin Panel", adminTickets: "Tickets", reply: "Reply", markRead: "Read ✓", faqBtn: "FAQ (How-to)",
+                sendDataError: "Please open the app via the main keyboard button to send data.",
+                faqText: "🧠 How to learn effectively? (JazUch Features)\n\nWe use the Ebbinghaus spaced repetition method!\n\n1. Study words in the list mode and track your time.\n2. Skip the words you already know ('Remember' button).\n3. Focus on hard words ('Don't Remember' button).\n4. Our smart bot will send you reminders following the forgetting curve (in 1, 3, 7, 14, and 30 days) so words stick in your long-term memory!\n\nUse the calendar to set goals, the streak fire for motivation, and statistics to track your progress!",
+                statsBtn: "Statistics", deleteLangConfirm: "Are you sure you want to remove this language?", accuracy: "Accuracy", attempts: "Attempts", resetStats: "Reset", resetAllStats: "Reset Language Stats", created: "Created", botReminders: "🤖 Smart Bot Reminders (Spaced Repetition)", saveChanges: "Save Changes", onboardingBtn: "Got it, let's start! 🚀",
+                deleteTopicConfirm: "Are you sure you want to delete this topic? After deletion, it will be available in the trash bin.",
+                trashBin: "🗑️ Trash Bin", trashEmpty: "Trash bin is empty", restore: "Restore", daysLeft: "days left", trashInfo: "Topics are stored for 30 days, then deleted forever.",
+                learnWords: "📖 Study", studyModeTitle: "Study Mode", timerText: "Study time", studyTimeStats: "Study time by days", sec: "sec.", min: "min.", hrs: "hrs.",
+                shareBtn: "📢 Share App", shareText: "Hi! I really liked this app for learning languages. Here is the link, try it too\nt.me/jazuchbot", shareCopied: "Text with link successfully copied!",
+                streakTitle: "Activity Streak", streakDays: "days in a row", takeFreeze: "❄️ Use Freeze", freezesLeft: "Available this month", freezeUsed: "Freeze for today is active!", noFreezes: "No freezes left for this month", daysShort: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+                regDateLabel: "Registration Date", months: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+                wordsTab: "Words", timeTab: "Time", totalTime: "Total time"
+            }
+        };
+
+        const DEFAULT_LANG_FLAGS = {
+            "Английский": "🇬🇧", "Арабский": "🇸🇦", "Испанский": "🇪🇸", "Итальянский": "🇮🇹", "Китайский": "🇨🇳", "Корейский": "🇰🇷", "Кряшенский": "🇷🇺", "Латынь": "🏛️", "Немецкий": "🇩🇪", "Русский": "🇷🇺", "Татарский": "🇷🇺", "Турецкий": "🇹🇷", "Французский": "🇫🇷", "Хинди": "🇮🇳", "Японский": "🇯🇵"
+        };
+        
+        const ALL_LANGUAGES = Object.keys(DEFAULT_LANG_FLAGS).sort((a, b) => a.localeCompare(b, 'ru'));
+        
+        const sendToBot = (dataObj, t) => {
+            try { 
+                tg.sendData(JSON.stringify(dataObj)); 
+            } catch (e) { 
+                alert(t('sendDataError')); 
+            }
+        };
+
+        function App() {
+            const [step, setStep] = useState('intro');
+            const [isLoading, setIsLoading] = useState(true);
+            const stateLoaded = useRef(false);
+            
+            const [isRegistered, setIsRegistered] = useState(false);
+            const [theme, setTheme] = useState('light');
+            const [userData, setUserData] = useState({ name: '', uiLanguage: 'ru', botReminders: true, regDate: getDateStr() });
+            const [myLanguages, setMyLanguages] = useState([]);
+            const [topics, setTopics] = useState([]);
+            const [goals, setGoals] = useState({});
+            const [studyTime, setStudyTime] = useState({});
+            const [streakData, setStreakData] = useState({ activeDays: [], frozenDays: [], freezesUsedMonth: '', freezesCount: 0 });
+            
+            const [activeLanguage, setActiveLanguage] = useState('');
+            const [activeTopic, setActiveTopic] = useState(null);
+            
+            const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
+            const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+            const [selectedDate, setSelectedDate] = useState(null);
+            const [goalText, setGoalText] = useState('');
+            const [goalTime, setGoalTime] = useState('14:00');
+            
+            const [supportModal, setSupportModal] = useState(false);
+            const [supportText, setSupportText] = useState('');
+            const [addLangModal, setAddLangModal] = useState(false);
+            const [streakModal, setStreakModal] = useState(false);
+            const [toastMsg, setToastMsg] = useState('');
+            const [statsTab, setStatsTab] = useState('words');
+
+            const [isAdminUser, setIsAdminUser] = useState(false);
+            const [adminData, setAdminData] = useState({ tickets: [] });
+            const [adminModal, setAdminModal] = useState(false);
+            const [selectedTicket, setSelectedTicket] = useState(null);
+            const [ticketReplyText, setTicketReplyText] = useState('');
+
+            const t = (key) => translations[userData?.uiLanguage || 'ru']?.[key] || translations['ru'][key] || key;
+            const getFlag = (lang) => DEFAULT_LANG_FLAGS[lang] || '🌍';
+
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_userData', userData); }, [userData]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_myLanguages', myLanguages); }, [myLanguages]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_topics', topics); }, [topics]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_theme', theme); }, [theme]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_isRegistered', isRegistered); }, [isRegistered]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_goals', goals); }, [goals]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_studyTime', studyTime); }, [studyTime]);
+            useEffect(() => { if (stateLoaded.current) AppStorage.save('jazuch_streakData', streakData); }, [streakData]);
+
+            useEffect(() => {
+                tg.expand();
+                const tgUserId = tg.initDataUnsafe?.user?.id;
+                if (Number(tgUserId) === ADMIN_ID) setIsAdminUser(true);
+
+                const urlParams = new URLSearchParams(window.location.search);
+                const dataParam = urlParams.get('data');
+                let botGoals = null;
+                let botRegDate = null;
+
+                if (dataParam) {
+                    try {
+                        const parsed = JSON.parse(decodeURIComponent(dataParam));
+                        if (parsed.goals) botGoals = parsed.goals;
+                        if (parsed.reg_date) botRegDate = parsed.reg_date;
+                        if (parsed.tickets) setAdminData({ tickets: parsed.tickets });
+                        if (parsed.is_admin && (!tgUserId || Number(tgUserId) === ADMIN_ID)) setIsAdminUser(true);
+                    } catch(e) {}
+                }
+
+                AppStorage.loadAll((values) => {
+                    const isReg = values.jazuch_isRegistered === 'true';
+                    setIsRegistered(isReg);
+                    if (values.jazuch_theme) setTheme(values.jazuch_theme);
+                    
+                    let localGoals = {};
+                    if (values.jazuch_goals) { try { localGoals = JSON.parse(values.jazuch_goals); } catch(e){} }
+                    let loadedGoals = (botGoals && Object.keys(botGoals).length > 0) ? { ...botGoals, ...localGoals } : localGoals;
+                    setGoals(loadedGoals);
+                    
+                    if (values.jazuch_myLanguages) { try { setMyLanguages(JSON.parse(values.jazuch_myLanguages)); } catch(e){} }
+                    
+                    let loadedTopics = [];
+                    if (values.jazuch_topics) { 
+                        try { 
+                            const parsedTopics = JSON.parse(values.jazuch_topics); 
+                            const now = Date.now();
+                            // Очистка корзины от тем, которые лежат более 30 дней
+                            loadedTopics = parsedTopics.filter(tp => !tp.deletedAt || (now - tp.deletedAt) < 30 * 24 * 60 * 60 * 1000);
+                            setTopics(loadedTopics);
+                        } catch(e){} 
+                    }
+
+                    if (values.jazuch_studyTime) { try { setStudyTime(JSON.parse(values.jazuch_studyTime)); } catch(e){} }
+                    if (values.jazuch_streakData) { try { setStreakData(JSON.parse(values.jazuch_streakData)); } catch(e){} }
+                    
+                    // Вычисление даты регистрации для старых и новых пользователей
+                    let earliestTs = Date.now();
+                    loadedTopics.forEach(tp => {
+                        if (tp.id && tp.id > 1600000000000 && tp.id < earliestTs) earliestTs = tp.id;
+                        (tp.words || []).forEach(w => {
+                            if (w.createdAt && w.createdAt > 1600000000000 && w.createdAt < earliestTs) earliestTs = w.createdAt;
+                        });
+                    });
+                    const fallbackRegDate = botRegDate || getDateStr(new Date(earliestTs));
+
+                    if (values.jazuch_userData) {
+                        try {
+                            const savedUser = JSON.parse(values.jazuch_userData);
+                            setUserData({ 
+                                ...savedUser, 
+                                uiLanguage: savedUser.uiLanguage || 'ru',
+                                botReminders: savedUser.botReminders !== false,
+                                regDate: savedUser.regDate || fallbackRegDate
+                            });
+                        } catch(e){}
+                    } else {
+                        setUserData({ name: tg.initDataUnsafe?.user?.first_name || '', uiLanguage: 'ru', botReminders: true, regDate: fallbackRegDate });
+                    }
+                    
+                    setTimeout(() => {
+                        stateLoaded.current = true;
+                        setIsLoading(false);
+                        if (isReg) setStep('dashboard');
+                        else setStep('register');
+                    }, 500);
+                });
+            }, []);
+
+            useEffect(() => {
+                if (theme === 'dark') document.documentElement.classList.add('dark');
+                else document.documentElement.classList.remove('dark');
+            }, [theme]);
+
+            const markActivityToday = () => {
+                const todayStr = getDateStr();
+                setStreakData(prev => {
+                    if ((prev.activeDays || []).includes(todayStr)) return prev;
+                    return { ...prev, activeDays: [...(prev.activeDays || []), todayStr] };
+                });
+            };
+
+            const recordStudySeconds = (lang, secs) => {
+                if (!secs || secs <= 0) return;
+                const todayStr = getDateStr();
+                setStudyTime(prev => {
+                    const langData = prev[lang] || {};
+                    return { ...prev, [lang]: { ...langData, [todayStr]: (langData[todayStr] || 0) + secs } };
+                });
+                markActivityToday();
+            };
+
+            const calculateStreak = () => {
+                const activeSet = new Set(streakData.activeDays || []);
+                const frozenSet = new Set(streakData.frozenDays || []);
+                let count = 0;
+                let d = new Date();
+                const todayStr = getDateStr(d);
+                
+                if (!activeSet.has(todayStr) && !frozenSet.has(todayStr)) {
+                    d.setDate(d.getDate() - 1);
+                }
+                while (true) {
+                    const s = getDateStr(d);
+                    if (activeSet.has(s) || frozenSet.has(s)) {
+                        count++;
+                        d.setDate(d.getDate() - 1);
+                    } else {
+                        break;
+                    }
+                }
+                return count;
+            };
+
+            const handleShare = () => {
+                const text = t('shareText');
+                const copyFallback = () => {
+                    const showToast = () => {
+                        setToastMsg(t('shareCopied'));
+                        setTimeout(() => setToastMsg(''), 3000);
+                    };
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).then(showToast).catch(() => {
+                            const ta = document.createElement('textarea');
+                            ta.value = text;
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(ta);
+                            showToast();
+                        });
+                    } else {
+                        const ta = document.createElement('textarea');
+                        ta.value = text;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                        showToast();
+                    }
+                };
+
+                try {
+                    if (tg && tg.openTelegramLink && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                        const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent("https://t.me/jazuchbot") + "&text=" + encodeURIComponent("Привет! Мне тут одно приложение понравилось, с помощью которого языки можно учить. Вот ссылка, тоже попробуй");
+                        tg.openTelegramLink(shareUrl);
+                    } else {
+                        copyFallback();
+                    }
+                } catch (e) {
+                    copyFallback();
+                }
+            };
+
+            const syncAllData = () => {
+                const activeTopicsForBot = topics.filter(tp => !tp.deletedAt).map(tp => ({
+                    id: tp.id,
+                    name: tp.name,
+                    language: tp.language,
+                    createdAt: tp.createdAt || tp.id,
+                    words: (tp.words || []).map(w => ({ q: w.q, a: w.a, createdAt: w.createdAt }))
+                }));
+                sendToBot({ 
+                    action: 'sync_all', 
+                    goals: goals, 
+                    uiLanguage: userData.uiLanguage, 
+                    botReminders: userData.botReminders,
+                    regDate: userData.regDate,
+                    topics: activeTopicsForBot
+                }, t);
+            };
+
+            const formatDuration = (sec) => {
+                if (!sec) return `0 ${t('sec')}`;
+                const h = Math.floor(sec / 3600);
+                const m = Math.floor((sec % 3600) / 60);
+                const s = sec % 60;
+                let res = [];
+                if (h > 0) res.push(`${h} ${t('hrs')}`);
+                if (m > 0) res.push(`${m} ${t('min')}`);
+                if (s > 0 && h === 0) res.push(`${s} ${t('sec')}`);
+                return res.join(' ');
+            };
+
+            const Footer = () => (
+                <div className="mt-8 text-center pb-6">
+                    <button onClick={handleShare} className="mb-5 px-6 py-3 bg-gradient-to-r from-teal-500 to-green-500 text-white font-bold rounded-2xl shadow-md hover:opacity-95 transition transform active:scale-95 text-sm">
+                        {t('shareBtn')}
+                    </button>
+                    <div className="opacity-70">
+                        <p className="font-bold text-xs">«Телляргя сӧйӧӱ белян»</p>
+                        <p className="text-xs italic">«С любовью к языкам»</p>
+                    </div>
+                </div>
+            );
+
+            if (step === 'intro') {
+                return (
+                    <div className="h-screen w-screen bg-mint flex flex-col items-center justify-center">
+                        <h1 className="text-5xl font-extrabold text-teal-900 drop-shadow-xl tracking-wide fade-in">ЯзУч</h1>
+                    </div>
+                );
+            }
+
+            if (step === 'register') {
+                return (
+                    <div className="min-h-screen p-6 flex flex-col items-center justify-center fade-in bg-gradient-to-br from-teal-50 to-mint dark:from-gray-900 dark:to-teal-900">
+                        <div className="w-full max-w-md bg-white/80 dark:bg-gray-800/80 backdrop-blur-lg rounded-3xl p-8 space-y-6">
+                            <h2 className="text-2xl font-bold text-center text-teal-600 dark:text-teal-400">{t('welcome')}</h2>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">{t('yourName')}</label>
+                                <input type="text" value={userData.name} onChange={e => setUserData({...userData, name: e.target.value})} className="w-full p-3 bg-white dark:bg-gray-700 rounded-xl outline-none font-semibold text-gray-900 dark:text-white" placeholder="Ваше имя..." />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300">{t('uiLang')}</label>
+                                <select value={userData.uiLanguage} onChange={(e) => setUserData({...userData, uiLanguage: e.target.value})} className="w-full p-3 bg-white dark:bg-gray-700 rounded-xl outline-none font-semibold text-gray-900 dark:text-white">
+                                    <option value="ru">🇷🇺 Русский</option><option value="en">🇬🇧 English</option>
+                                </select>
+                            </div>
+                            <button onClick={() => { setUserData(prev => ({...prev, regDate: getDateStr()})); setMyLanguages(['Английский']); setStep('onboarding'); }} className="w-full py-4 bg-teal-500 hover:bg-teal-600 transition text-white rounded-xl font-bold shadow-lg">{t('login')}</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'onboarding') {
+                return (
+                    <div className="min-h-screen p-6 flex flex-col items-center justify-center fade-in bg-gradient-to-br from-teal-50 to-blue-50 dark:from-gray-900 dark:to-gray-800">
+                        <div className="w-full max-w-md bg-white dark:bg-gray-800 rounded-3xl p-8 shadow-xl">
+                            <h2 className="text-2xl font-extrabold mb-4 text-teal-600 dark:text-teal-400">🎉 {t('welcome')}, {userData.name || 'друг'}!</h2>
+                            <div className="whitespace-pre-line leading-relaxed text-sm text-gray-700 dark:text-gray-300 mb-8 font-medium">
+                                {t('faqText')}
+                            </div>
+                            <button onClick={() => { setIsRegistered(true); setStep('dashboard'); }} className="w-full py-4 bg-teal-500 hover:bg-teal-600 transition text-white rounded-xl font-bold shadow-lg">
+                                {t('onboardingBtn')}
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'dashboard') {
+                const today = new Date();
+                const todayStr = getDateStr(today);
+                const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+                const unreadTicketsCount = adminData.tickets.filter(tk => tk.status === 'open').length;
+
+                // Границы перелистывания календаря (от месяца регистрации до +24 месяцев вперёд)
+                const regParts = (userData.regDate || todayStr).split('-');
+                const minYear = parseInt(regParts[0], 10) || today.getFullYear();
+                const minMonth = (parseInt(regParts[1], 10) || (today.getMonth() + 1)) - 1;
+                
+                const maxDate = new Date(today.getFullYear(), today.getMonth() + 24, 1);
+                const maxYear = maxDate.getFullYear();
+                const maxMonth = maxDate.getMonth();
+
+                const canGoPrev = calYear > minYear || (calYear === minYear && calMonth > minMonth);
+                const canGoNext = calYear < maxYear || (calYear === maxYear && calMonth < maxMonth);
+
+                const handlePrevMonth = () => {
+                    if (!canGoPrev) return;
+                    if (calMonth === 0) { setCalMonth(11); setCalYear(y => y - 1); }
+                    else setCalMonth(m => m - 1);
+                };
+                const handleNextMonth = () => {
+                    if (!canGoNext) return;
+                    if (calMonth === 11) { setCalMonth(0); setCalYear(y => y + 1); }
+                    else setCalMonth(m => m + 1);
+                };
+
+                const streakCount = calculateStreak();
+                const isTodayActiveOrFrozen = (streakData.activeDays || []).includes(todayStr) || (streakData.frozenDays || []).includes(todayStr);
+
+                // Дни текущей недели (с понедельника) для окошка огонька
+                const currentDayOfWeek = (today.getDay() + 6) % 7; 
+                const monday = new Date(today);
+                monday.setDate(today.getDate() - currentDayOfWeek);
+                const weekDays = Array.from({length: 7}, (_, i) => {
+                    const d = new Date(monday);
+                    d.setDate(monday.getDate() + i);
+                    const s = getDateStr(d);
+                    return {
+                        label: t('daysShort')[i],
+                        dateStr: s,
+                        dayNum: d.getDate(),
+                        isActive: (streakData.activeDays || []).includes(s),
+                        isFrozen: (streakData.frozenDays || []).includes(s),
+                        isToday: s === todayStr
+                    };
+                });
+
+                const currentMonthKey = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2, '0')}`;
+                const usedFreezesThisMonth = streakData.freezesUsedMonth === currentMonthKey ? (streakData.freezesCount || 0) : 0;
+                const freezesRemaining = Math.max(0, 3 - usedFreezesThisMonth);
+                const isTodayFrozen = (streakData.frozenDays || []).includes(todayStr);
+
+                return (
+                    <div className="min-h-screen p-5 pb-20 fade-in bg-gray-50 dark:bg-gray-900 flex flex-col">
+                        {toastMsg && (
+                            <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-teal-600 text-white px-5 py-3 rounded-2xl shadow-2xl z-50 font-bold text-sm fade-in text-center w-11/12 max-w-sm">
+                                ✨ {toastMsg}
+                            </div>
+                        )}
+
+                        <header className="flex justify-between items-center mb-6 pt-2">
+                            <h1 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-teal-500 to-green-500">ЯзУч</h1>
+                            <div className="flex gap-1.5 items-center">
+                                <button onClick={() => setStreakModal(true)} className={` h-10 px-2.5 flex items-center justify-center gap-1 bg-white dark:bg-gray-800 rounded-full shadow-md text-sm font-extrabold transition hover:scale-105 ${streakCount > 0 || isTodayActiveOrFrozen ? 'text-orange-500' : 'text-gray-400 grayscale'}`}>
+                                    <span>🔥</span><span>{streakCount}</span>
+                                </button>
+                                <button onClick={() => setStep('faq')} className="w-10 h-10 flex items-center justify-center bg-white dark:bg-gray-800 rounded-full shadow-md text-lg transition hover:scale-105">❓</button>
+                                {isAdminUser ? (
+                                    <button onClick={() => setAdminModal(true)} className="relative w-10 h-10 flex items-center justify-center bg-white dark:bg-gray-800 rounded-full shadow-md text-lg transition hover:scale-105">
+                                        🔔{unreadTicketsCount > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] w-4 h-4 flex items-center justify-center rounded-full">{unreadTicketsCount}</span>}
+                                    </button>
+                                ) : (
+                                    <button onClick={() => setSupportModal(true)} className="w-10 h-10 flex items-center justify-center bg-white dark:bg-gray-800 rounded-full shadow-md text-lg transition hover:scale-105">🎧</button>
+                                )}
+                                <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="w-10 h-10 flex items-center justify-center bg-white dark:bg-gray-800 rounded-full shadow-md text-lg transition hover:scale-105">{theme === 'light' ? '🌙' : '☀️'}</button>
+                                <button onClick={() => setStep('settings')} className="w-10 h-10 flex items-center justify-center bg-white dark:bg-gray-800 rounded-full shadow-md text-lg transition hover:scale-105">⚙️</button>
+                            </div>
+                        </header>
+
+                        <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 mb-6">
+                            <div className="flex justify-between items-center mb-1">
+                                <h2 className="font-bold text-lg">📅 {t('goalCalendar')}</h2>
+                                <div className="flex items-center gap-2 bg-gray-50 dark:bg-gray-700/60 px-2.5 py-1 rounded-xl">
+                                    <button onClick={handlePrevMonth} disabled={!canGoPrev} className={`font-extrabold px-1.5 transition ${canGoPrev ? 'text-teal-600 dark:text-teal-400 hover:scale-110' : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'}`}>‹</button>
+                                    <span className="text-xs font-extrabold min-w-[95px] text-center">{t('months')[calMonth]} {calYear}</span>
+                                    <button onClick={handleNextMonth} disabled={!canGoNext} className={`font-extrabold px-1.5 transition ${canGoNext ? 'text-teal-600 dark:text-teal-400 hover:scale-110' : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'}`}>›</button>
+                                </div>
+                            </div>
+                            <p className="text-xs text-gray-400 mb-3">{t('clickDay')}</p>
+                            <div className="grid grid-cols-7 gap-1">
+                                {Array.from({length: daysInMonth}, (_, i) => i + 1).map(day => {
+                                    const dateStr = `${calYear}-${String(calMonth+1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                    const isToday = dateStr === todayStr;
+                                    const isPast = dateStr < todayStr;
+                                    const hasGoal = goals[dateStr] && goals[dateStr].text;
+                                    
+                                    let cellClasses = 'bg-gray-50 dark:bg-gray-700';
+                                    if (isToday) {
+                                        cellClasses = 'bg-teal-500 text-white shadow-md';
+                                    } else if (hasGoal) {
+                                        cellClasses = isPast 
+                                            ? 'bg-teal-50/40 text-teal-700/50 border border-teal-200/50 dark:bg-teal-900/20 dark:text-teal-400/50 dark:border-teal-800/40'
+                                            : 'bg-teal-50 text-teal-700 border border-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-700';
+                                    } else if (isPast) {
+                                        cellClasses = 'bg-gray-100/70 text-gray-400 dark:bg-gray-800/50 dark:text-gray-500 opacity-60';
+                                    }
+
+                                    return (
+                                        <div key={day} onClick={() => { setSelectedDate(dateStr); setGoalText(hasGoal ? goals[dateStr].text : ''); setGoalTime(hasGoal ? goals[dateStr].time : '14:00'); }} 
+                                             className={`relative aspect-square flex flex-col items-center justify-center rounded-lg text-sm font-semibold cursor-pointer transition hover:opacity-80 ${cellClasses}`}>
+                                            <span>{day}</span>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                            <button onClick={syncAllData} className="w-full mt-4 py-3 bg-teal-50 dark:bg-teal-900/30 text-teal-600 dark:text-teal-400 font-bold rounded-xl text-sm border border-teal-200 dark:border-teal-800 transition hover:bg-teal-100 dark:hover:bg-teal-900/50">
+                                {t('syncBot')}
+                            </button>
+                        </div>
+
+                        <div className="flex-1">
+                            <h2 className="text-xl font-bold mb-4">{t('myLangs')}</h2>
+                            <div className="grid grid-cols-2 gap-4">
+                                {myLanguages.map(lang => (
+                                    <div key={lang} className="bg-white dark:bg-gray-800 p-4 rounded-3xl cursor-pointer border border-gray-100 dark:border-gray-700 shadow-sm flex flex-col relative group hover:shadow-md transition">
+                                        <div className="absolute top-3 right-3 flex gap-2">
+                                            <button onClick={(e) => { e.stopPropagation(); setActiveLanguage(lang); setStatsTab('words'); setStep('lang_stats'); }} className="text-gray-400 hover:text-blue-500 transition text-sm">📊</button>
+                                            <button onClick={(e) => { e.stopPropagation(); if(confirm(t('deleteLangConfirm'))) setMyLanguages(prev => prev.filter(l => l !== lang)); }} className="text-gray-400 hover:text-red-500 transition text-sm">✕</button>
+                                        </div>
+                                        <div onClick={() => { setActiveLanguage(lang); setStep('app'); }} className="flex flex-col items-center justify-center flex-1 mt-4">
+                                            <div className="text-4xl mb-2 drop-shadow-sm">{getFlag(lang)}</div>
+                                            <h3 className="font-bold text-lg text-gray-800 dark:text-gray-200">{lang}</h3>
+                                        </div>
+                                    </div>
+                                ))}
+                                <div onClick={() => setAddLangModal(true)} className="bg-teal-50/50 dark:bg-gray-800/50 p-5 rounded-3xl flex flex-col items-center justify-center border-2 border-dashed border-teal-300 dark:border-teal-700 cursor-pointer transition hover:bg-teal-50 dark:hover:bg-gray-800">
+                                    <span className="text-3xl text-teal-500 opacity-70">+</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {streakModal && (
+                            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in">
+                                <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="text-xl font-extrabold text-orange-500 flex items-center gap-2">🔥 {t('streakTitle')}</h3>
+                                        <button onClick={() => setStreakModal(false)} className="text-gray-400 hover:text-red-500 font-bold px-2 text-xl">✕</button>
+                                    </div>
+                                    <div className="text-center my-4">
+                                        <div className="text-5xl font-extrabold text-orange-500 mb-1">{streakCount}</div>
+                                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">{t('streakDays')}</p>
+                                    </div>
+                                    
+                                    <div className="relative flex justify-between items-center my-6 px-1">
+                                        <div className="absolute left-4 right-4 top-4 h-1 bg-gray-200 dark:bg-gray-700 z-0 rounded-full"></div>
+                                        {weekDays.map((wd, i) => (
+                                            <div key={i} className="relative z-10 flex flex-col items-center gap-1.5">
+                                                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-extrabold text-xs transition shadow-sm ${
+                                                    wd.isActive ? 'bg-orange-500 text-white shadow-orange-500/30 shadow-md' : 
+                                                    wd.isFrozen ? 'bg-blue-400 text-white shadow-blue-400/30 shadow-md' : 
+                                                    'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                                                } ${wd.isToday ? 'ring-2 ring-offset-2 ring-orange-400 dark:ring-offset-gray-800' : ''}`}>
+                                                    {wd.isActive ? '🔥' : wd.isFrozen ? '❄️' : wd.dayNum}
+                                                </div>
+                                                <span className={`text-[11px] font-bold ${wd.isToday ? 'text-orange-500' : 'text-gray-400'}`}>{wd.label}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="mt-6 pt-4 border-t border-gray-100 dark:border-gray-700 text-center">
+                                        <p className="text-xs text-gray-400 mb-3">{t('freezesLeft')}: <span className="font-bold text-blue-500">{freezesRemaining} / 3</span></p>
+                                        <button 
+                                            disabled={isTodayFrozen || freezesRemaining <= 0}
+                                            onClick={() => {
+                                                if (isTodayFrozen || freezesRemaining <= 0) return;
+                                                setStreakData(prev => ({
+                                                    ...prev,
+                                                    frozenDays: [...(prev.frozenDays || []), todayStr],
+                                                    freezesUsedMonth: currentMonthKey,
+                                                    freezesCount: usedFreezesThisMonth + 1
+                                                }));
+                                            }}
+                                            className={`w-full py-3.5 rounded-2xl font-bold text-sm transition shadow-sm ${
+                                                isTodayFrozen ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-500 cursor-default' :
+                                                freezesRemaining > 0 ? 'bg-blue-500 hover:bg-blue-600 text-white shadow-md' :
+                                                'bg-gray-100 dark:bg-gray-700 text-gray-400 cursor-not-allowed'
+                                            }`}>
+                                            {isTodayFrozen ? t('freezeUsed') : freezesRemaining > 0 ? t('takeFreeze') : t('noFreezes')}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {selectedDate && (
+                            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in">
+                                <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 w-full max-w-sm">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="text-lg font-bold text-teal-600 dark:text-teal-400">{selectedDate}</h3>
+                                        <button onClick={() => setSelectedDate(null)} className="text-gray-400 font-bold px-2">✕</button>
+                                    </div>
+                                    <div className="space-y-3 mb-4">
+                                        <input type="text" value={goalText} onChange={e => setGoalText(e.target.value)} placeholder={t('goalText')} className="w-full p-3 bg-gray-50 dark:bg-gray-700 dark:text-white rounded-xl outline-none" />
+                                        <input type="time" value={goalTime} onChange={e => setGoalTime(e.target.value)} className="w-full p-3 bg-gray-50 dark:bg-gray-700 dark:text-white rounded-xl outline-none font-bold" />
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => {
+                                            const newGoals = {...goals};
+                                            delete newGoals[selectedDate];
+                                            setGoals(newGoals);
+                                            setSelectedDate(null);
+                                        }} className="flex-1 py-3 bg-red-50 dark:bg-red-900/30 text-red-500 font-bold rounded-xl">Удалить</button>
+                                        <button onClick={() => {
+                                            if (goalText.trim()) setGoals({ ...goals, [selectedDate]: { text: goalText.trim(), time: goalTime, notified: false } });
+                                            setSelectedDate(null);
+                                        }} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl">{t('saveGoal')}</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {addLangModal && (
+                            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in">
+                                <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 w-full max-w-sm max-h-[85vh] flex flex-col">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="text-xl font-bold text-teal-600 dark:text-teal-400">{t('addLang')}</h3>
+                                        <button onClick={() => setAddLangModal(false)} className="text-red-500 font-bold px-2 text-xl">✕</button>
+                                    </div>
+                                    <div className="overflow-y-auto flex-1 space-y-2 pr-2">
+                                        {ALL_LANGUAGES.filter(l => !myLanguages.includes(l)).map(lang => (
+                                            <div key={lang} onClick={() => { setMyLanguages([...myLanguages, lang]); setAddLangModal(false); }} className="p-3 bg-gray-50 dark:bg-gray-700 border border-gray-100 dark:border-gray-600 rounded-xl flex items-center gap-3 cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 transition">
+                                                <span className="text-2xl">{getFlag(lang)}</span>
+                                                <span className="font-bold">{lang}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {supportModal && (
+                            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in">
+                                <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 w-full max-w-sm space-y-4">
+                                    <h3 className="text-xl font-bold">{t('support')}</h3>
+                                    <textarea value={supportText} onChange={e => setSupportText(e.target.value)} rows="4" className="w-full p-3 bg-gray-50 dark:bg-gray-700 dark:text-white rounded-xl outline-none resize-none"></textarea>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setSupportModal(false)} className="flex-1 py-3 bg-gray-100 dark:bg-gray-700 font-bold rounded-xl">{t('cancel')}</button>
+                                        <button onClick={() => { if(supportText.trim()) sendToBot({action: 'support', text: supportText}, t); }} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl text-sm">{t('sendClose')}</button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {adminModal && isAdminUser && (
+                            <div className="fixed inset-0 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 z-50 flex flex-col p-5 overflow-y-auto fade-in">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="text-2xl font-extrabold text-teal-600 dark:text-teal-400">{t('adminPanel')} 🛡️</h2>
+                                    <button onClick={() => setAdminModal(false)} className="text-red-500 hover:text-red-600 font-bold px-2 text-xl">✕</button>
+                                </div>
+
+                                {!selectedTicket && (
+                                    <div className="space-y-3">
+                                        {adminData.tickets.map(ticket => (
+                                            <div key={ticket.id} onClick={() => setSelectedTicket(ticket)} className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border cursor-pointer border-teal-200 dark:border-teal-800 hover:shadow-md transition">
+                                                <span className="font-bold text-sm text-teal-600 dark:text-teal-400">#{ticket.id} от {ticket.name}</span>
+                                                <p className="text-sm mt-1">{ticket.text}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {selectedTicket && (
+                                    <div className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-md space-y-4">
+                                        <button onClick={() => setSelectedTicket(null)} className="text-teal-600 dark:text-teal-400 text-sm font-bold hover:underline">← Назад</button>
+                                        <div>
+                                            <h3 className="text-lg font-bold">Тикет #{selectedTicket.id}</h3>
+                                        </div>
+                                        <div className="bg-gray-50 dark:bg-gray-700 dark:text-white p-3 rounded-xl text-sm border dark:border-gray-600">{selectedTicket.text}</div>
+                                        <textarea value={ticketReplyText} onChange={e => setTicketReplyText(e.target.value)} placeholder="Ответ..." rows="3" className="w-full p-3 bg-gray-50 dark:bg-gray-700 dark:text-white rounded-xl text-sm border dark:border-gray-600"></textarea>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => sendToBot({action: 'admin_mark_read', ticket_id: parseInt(selectedTicket.id)}, t)} className="flex-1 py-3 bg-gray-200 dark:bg-gray-700 font-bold rounded-xl text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition">{t('markRead')}</button>
+                                            <button onClick={() => { if(ticketReplyText) sendToBot({action: 'admin_reply', ticket_id: parseInt(selectedTicket.id), user_id: selectedTicket.user_id, text: ticketReplyText}, t); }} className="flex-1 py-3 bg-teal-500 hover:bg-teal-600 text-white font-bold rounded-xl text-sm transition">{t('reply')}</button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        <Footer />
+                    </div>
+                );
+            }
+
+            if (step === 'faq') {
+                return (
+                    <div className="min-h-screen p-6 flex flex-col bg-gray-50 dark:bg-gray-900">
+                        <button onClick={() => setStep('dashboard')} className="mb-6 text-teal-600 dark:text-teal-400 font-bold text-left hover:underline">{t('back')}</button>
+                        <h2 className="text-2xl font-extrabold mb-6 text-gray-800 dark:text-white">❓ {t('faqBtn')}</h2>
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 whitespace-pre-line leading-relaxed text-sm font-medium">
+                            {t('faqText')}
+                        </div>
+                    </div>
+                );
+            }
+            
+            if (step === 'settings') {
+                return (
+                    <div className="min-h-screen p-6 flex flex-col bg-gray-50 dark:bg-gray-900">
+                        <button onClick={() => setStep('dashboard')} className="mb-6 text-teal-600 dark:text-teal-400 font-bold text-left hover:underline">{t('back')}</button>
+                        <h2 className="text-3xl font-extrabold mb-6">⚙️ {t('settings')}</h2>
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-sm space-y-5">
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold">{t('yourName')}</label>
+                                <input type="text" value={userData.name} onChange={e => setUserData({...userData, name: e.target.value})} className="w-full p-3 bg-gray-50 dark:bg-gray-700 dark:text-white rounded-xl outline-none" />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-semibold">{t('uiLang')}</label>
+                                <select value={userData.uiLanguage} onChange={(e) => setUserData({...userData, uiLanguage: e.target.value})} className="w-full p-3 bg-gray-50 dark:bg-gray-700 dark:text-white rounded-xl font-bold outline-none">
+                                    <option value="ru">🇷🇺 Русский</option><option value="en">🇬🇧 English</option>
+                                </select>
+                            </div>
+                            
+                            <label className="flex items-center gap-3 cursor-pointer p-3 bg-gray-50 dark:bg-gray-700 rounded-xl border border-gray-100 dark:border-gray-600">
+                                <input type="checkbox" checked={userData.botReminders} onChange={e => setUserData({...userData, botReminders: e.target.checked})} className="w-5 h-5 accent-teal-500" />
+                                <span className="text-sm font-semibold leading-tight">{t('botReminders')}</span>
+                            </label>
+
+                            <div className="p-3 bg-gray-50 dark:bg-gray-700/60 rounded-xl flex justify-between items-center text-xs font-bold text-gray-500 dark:text-gray-400">
+                                <span>📅 {t('regDateLabel')}:</span>
+                                <span className="text-teal-600 dark:text-teal-400">{userData.regDate || getDateStr()}</span>
+                            </div>
+
+                            <button onClick={syncAllData} className="w-full py-3 mt-4 text-white font-bold bg-teal-500 hover:bg-teal-600 transition rounded-xl shadow-md">
+                                {t('syncBot')}
+                            </button>
+                            
+                            <div className="pt-4 border-t border-gray-100 dark:border-gray-700 mt-6">
+                                <button onClick={() => { 
+                                    if(confirm(t('resetConfirm'))) { 
+                                        AppStorage.clear(() => {
+                                            sendToBot({action: 'reset_data'}, t);
+                                        }); 
+                                    } 
+                                }} className="w-full py-3 text-red-500 font-bold bg-red-50 dark:bg-red-900/20 rounded-xl hover:bg-red-100 transition">{t('resetData')}</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'lang_stats') {
+                const currentTopics = topics.filter(tp => tp.language === activeLanguage && !tp.deletedAt);
+                const allWords = currentTopics.flatMap(tp => tp.words.map(w => ({...w, topicId: tp.id})));
+                const totalAttempts = allWords.reduce((sum, w) => sum + (w.stats?.attempts || 0), 0);
+                const totalCorrect = allWords.reduce((sum, w) => sum + (w.stats?.correct || 0), 0);
+                const accuracy = totalAttempts > 0 ? Math.round((totalCorrect / totalAttempts) * 100) : 0;
+
+                const langTimeObj = studyTime[activeLanguage] || {};
+                const timeEntries = Object.entries(langTimeObj).sort((a, b) => b[0].localeCompare(a[0]));
+                const totalSecondsLearned = timeEntries.reduce((acc, [_, s]) => acc + s, 0);
+
+                return (
+                    <div className="min-h-screen p-6 flex flex-col bg-gray-50 dark:bg-gray-900">
+                        <header className="flex justify-between items-center mb-6 pt-2">
+                            <button onClick={() => setStep('dashboard')} className="text-teal-600 dark:text-teal-400 font-bold hover:underline">{t('back')}</button>
+                            <h2 className="text-xl font-bold flex items-center gap-2">{getFlag(activeLanguage)} {t('statsBtn')}</h2>
+                            <div className="w-10"></div>
+                        </header>
+                        <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 mb-4 flex justify-around text-center">
+                            <div>
+                                <p className="text-2xl font-extrabold text-teal-500">{accuracy}%</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">{t('accuracy')}</p>
+                            </div>
+                            <div>
+                                <p className="text-2xl font-extrabold text-blue-500">{totalAttempts}</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">{t('attempts')}</p>
+                            </div>
+                            <div>
+                                <p className="text-lg font-extrabold text-purple-500 mt-1">{formatDuration(totalSecondsLearned)}</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">{t('totalTime')}</p>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-2 mb-4 bg-white dark:bg-gray-800 p-1.5 rounded-2xl border border-gray-100 dark:border-gray-700">
+                            <button onClick={() => setStatsTab('words')} className={`flex-1 py-2 rounded-xl font-bold text-sm transition ${statsTab === 'words' ? 'bg-teal-500 text-white shadow' : 'text-gray-500'}`}>{t('wordsTab')}</button>
+                            <button onClick={() => setStatsTab('time')} className={`flex-1 py-2 rounded-xl font-bold text-sm transition ${statsTab === 'time' ? 'bg-teal-500 text-white shadow' : 'text-gray-500'}`}>⏱️ {t('timeTab')}</button>
+                        </div>
+
+                        {statsTab === 'words' ? (
+                            <div className="flex-1 overflow-y-auto space-y-3 mb-6">
+                                {allWords.map((w, idx) => {
+                                    const acc = w.stats?.attempts ? Math.round((w.stats.correct / w.stats.attempts) * 100) : 0;
+                                    const createdDate = new Date(w.createdAt || Date.now()).toLocaleDateString();
+                                    return (
+                                        <div key={idx} className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 flex justify-between items-center">
+                                            <div>
+                                                <p className="font-bold">{w.q} - <span className="text-teal-600 dark:text-teal-400">{w.a}</span></p>
+                                                <p className="text-xs text-gray-400">{t('created')}: {createdDate} | {t('attempts')}: {w.stats?.attempts || 0}</p>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <span className={`font-bold text-sm ${acc >= 70 ? 'text-green-500' : acc > 0 ? 'text-orange-500' : 'text-gray-400'}`}>{w.stats?.attempts ? acc+'%' : '-'}</span>
+                                                <button onClick={() => {
+                                                    setTopics(prev => prev.map(tp => tp.id !== w.topicId ? tp : { ...tp, words: tp.words.map(cw => cw.id !== w.id ? cw : { ...cw, stats: {attempts:0, correct:0, wrong:0} }) }))
+                                                }} className="text-red-400 text-xs underline hover:text-red-500">{t('resetStats')}</button>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                                {allWords.length === 0 && <p className="text-center text-gray-400 mt-10">{t('empty')}</p>}
+                            </div>
+                        ) : (
+                            <div className="flex-1 overflow-y-auto space-y-3 mb-6">
+                                <h3 className="text-sm font-bold text-gray-400 px-1">{t('studyTimeStats')}</h3>
+                                {timeEntries.map(([dateKey, secs]) => (
+                                    <div key={dateKey} className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 flex justify-between items-center">
+                                        <span className="font-bold text-sm">📅 {dateKey}</span>
+                                        <span className="font-extrabold text-teal-600 dark:text-teal-400 text-sm">⏱️ {formatDuration(secs)}</span>
+                                    </div>
+                                ))}
+                                {timeEntries.length === 0 && <p className="text-center text-gray-400 mt-10">{t('empty')}</p>}
+                            </div>
+                        )}
+                        
+                        <button onClick={() => {
+                            if(confirm(t('resetConfirm'))) {
+                                setTopics(prev => prev.map(tp => tp.language !== activeLanguage ? tp : { ...tp, words: tp.words.map(cw => ({...cw, stats: {attempts:0, correct:0, wrong:0}})) }));
+                                setStudyTime(prev => ({ ...prev, [activeLanguage]: {} }));
+                            }
+                        }} className="w-full py-4 text-red-500 font-bold bg-red-50 dark:bg-red-900/20 rounded-2xl hover:bg-red-100 transition">{t('resetAllStats')}</button>
+                    </div>
+                )
+            }
+
+            if (step === 'trash') {
+                const deletedTopics = topics.filter(tp => tp.language === activeLanguage && tp.deletedAt);
+                return (
+                    <div className="min-h-screen p-5 flex flex-col bg-gray-50 dark:bg-gray-900 fade-in">
+                        <header className="flex justify-between items-center mb-4 pt-2">
+                            <button onClick={() => setStep('app')} className="text-teal-600 dark:text-teal-400 font-bold hover:underline">{t('back')}</button>
+                            <h1 className="text-xl font-bold flex items-center gap-2">{t('trashBin')}</h1>
+                            <div className="w-10"></div>
+                        </header>
+                        <p className="text-xs text-center text-gray-400 mb-6">{t('trashInfo')}</p>
+                        <div className="flex-1 space-y-4">
+                            {deletedTopics.map(topic => {
+                                const daysPassed = Math.floor((Date.now() - topic.deletedAt) / (1000 * 60 * 60 * 24));
+                                const daysLeft = Math.max(1, 30 - daysPassed);
+                                return (
+                                    <div key={topic.id} className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 flex justify-between items-center">
+                                        <div>
+                                            <h3 className="font-bold text-lg text-gray-700 dark:text-gray-300">{topic.name}</h3>
+                                            <p className="text-xs text-gray-400">{topic.words.length} {t('cards')} • ⏳ {daysLeft} {t('daysLeft')}</p>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => {
+                                                setTopics(prev => prev.map(tp => tp.id === topic.id ? { ...tp, deletedAt: null } : tp));
+                                            }} className="bg-teal-50 dark:bg-teal-900/40 text-teal-600 dark:text-teal-400 px-3 py-2 rounded-xl text-xs font-bold hover:bg-teal-100 transition">
+                                                {t('restore')}
+                                            </button>
+                                            <button onClick={() => {
+                                                setTopics(prev => prev.filter(tp => tp.id !== topic.id));
+                                            }} className="bg-red-50 dark:bg-red-900/30 text-red-500 px-3 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition">
+                                                ✕
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {deletedTopics.length === 0 && <p className="text-center text-gray-400 mt-10">{t('trashEmpty')}</p>}
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'study_mode' && activeTopic) {
+                const latestTopicObj = topics.find(tp => tp.id === activeTopic.id) || activeTopic;
+                return (
+                    <StudyListMode 
+                        t={t} 
+                        topic={latestTopicObj} 
+                        onExit={(elapsedSecs) => {
+                            recordStudySeconds(activeLanguage, elapsedSecs);
+                            setActiveTopic(null);
+                            setStep('app');
+                        }} 
+                    />
+                );
+            }
+
+            if (step === 'app' && !activeTopic) {
+                const currentTopics = topics.filter(tp => tp.language === activeLanguage && !tp.deletedAt);
+                const trashCount = topics.filter(tp => tp.language === activeLanguage && tp.deletedAt).length;
+                return (
+                    <div className="min-h-screen p-5 flex flex-col bg-gray-50 dark:bg-gray-900 fade-in">
+                        <header className="flex justify-between items-center mb-6 pt-2">
+                            <button onClick={() => setStep('dashboard')} className="text-teal-600 dark:text-teal-400 font-bold hover:underline">{t('back')}</button>
+                            <h1 className="text-xl font-bold flex items-center gap-2">{getFlag(activeLanguage)} {activeLanguage}</h1>
+                            <button onClick={() => setStep('trash')} className="relative bg-white dark:bg-gray-800 px-3 py-1.5 rounded-full shadow-sm text-sm font-bold border border-gray-100 dark:border-gray-700 hover:scale-105 transition">
+                                🗑️{trashCount > 0 && <span className="ml-1 text-xs text-teal-600 dark:text-teal-400 font-extrabold">({trashCount})</span>}
+                            </button>
+                        </header>
+                        
+                        <div className="flex-1 space-y-4">
+                            {currentTopics.map(topic => (
+                                <div key={topic.id} className="bg-white dark:bg-gray-800 p-5 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col gap-3 transition hover:shadow-md">
+                                    <div className="flex justify-between items-start w-full">
+                                        <div onClick={() => setActiveTopic(topic)} className="flex-1 cursor-pointer">
+                                            <h3 className="font-bold text-lg leading-snug">{topic.name}</h3>
+                                            <p className="text-xs text-gray-400 mt-0.5">{topic.words.length} {t('cards')}</p>
+                                        </div>
+                                        <button onClick={() => {
+                                            if (confirm(t('deleteTopicConfirm'))) {
+                                                setTopics(prev => prev.map(tp => tp.id === topic.id ? { ...tp, deletedAt: Date.now() } : tp));
+                                            }
+                                        }} className="text-gray-300 hover:text-red-500 transition px-1.5 text-lg" title="Удалить тему">🗑️</button>
+                                    </div>
+                                    <div className="flex gap-2 justify-end pt-1 border-t border-gray-50 dark:border-gray-700/50">
+                                        <button onClick={() => {setActiveTopic(topic); setStep('edit_topic');}} className="bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-3 py-2 rounded-xl text-xs font-bold hover:bg-gray-200 transition">{t('editTopic')}</button>
+                                        <button onClick={() => {setActiveTopic(topic); setStep('study_mode');}} className="bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-3.5 py-2 rounded-xl text-xs font-bold hover:bg-blue-100 transition">{t('learnWords')}</button>
+                                        <button onClick={() => setActiveTopic(topic)} className="bg-teal-50 dark:bg-teal-900/40 text-teal-600 dark:text-teal-400 px-4 py-1.5 rounded-xl font-bold text-lg hover:bg-teal-100 transition">▶</button>
+                                    </div>
+                                </div>
+                            ))}
+                            {currentTopics.length === 0 && <p className="text-center text-gray-400 mt-10">{t('empty')}</p>}
+                            <button onClick={() => {setActiveTopic(null); setStep('edit_topic');}} className="w-full mt-4 py-4 text-teal-600 dark:text-teal-400 font-bold border-2 border-dashed border-teal-300 dark:border-teal-700 rounded-3xl hover:bg-teal-50 dark:hover:bg-teal-900/20 transition">+ {t('newTopic')}</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (step === 'edit_topic') {
+                return (
+                    <CreateTopicMode t={t} language={activeLanguage} initialTopic={activeTopic} onSave={(updatedTopic) => { 
+                        if (activeTopic && updatedTopic.id) {
+                            setTopics(prev => prev.map(tp => tp.id === updatedTopic.id ? { ...tp, ...updatedTopic, language: activeLanguage } : tp));
+                        } else {
+                            const now = Date.now();
+                            setTopics(prev => [...prev, { ...updatedTopic, id: now, createdAt: now, language: activeLanguage }]); 
+                        }
+                        setStep('app'); setActiveTopic(null);
+                    }} onCancel={() => {setStep('app'); setActiveTopic(null);}} />
+                );
+            }
+
+            if (activeTopic) {
+                const latestTopicObj = topics.find(tp => tp.id === activeTopic.id) || activeTopic;
+                return <FlashcardMode t={t} topic={latestTopicObj} onRecordAnswer={(tId, wId, corr) => {
+                    markActivityToday();
+                    setTopics(prev => prev.map(tp => tp.id !== tId ? tp : { ...tp, words: tp.words.map(w => {
+                        if(w.id !== wId) return w;
+                        const st = w.stats || {attempts:0, correct:0, wrong:0};
+                        return { ...w, stats: { attempts: st.attempts+1, correct: st.correct+(corr?1:0), wrong: st.wrong+(corr?0:1) } };
+                    })}));
+                }} onBack={() => setActiveTopic(null)} />;
+            }
+        }
+
+        function StudyListMode({ t, topic, onExit }) {
+            const [seconds, setSeconds] = useState(0);
+            useEffect(() => {
+                const interval = setInterval(() => {
+                    setSeconds(s => s + 1);
+                }, 1000);
+                return () => clearInterval(interval);
+            }, []);
+
+            const mins = String(Math.floor(seconds / 60)).padStart(2, '0');
+            const secs = String(seconds % 60).padStart(2, '0');
+
+            return (
+                <div className="min-h-screen p-5 flex flex-col bg-gray-50 dark:bg-gray-900 fade-in">
+                    <header className="flex justify-between items-center mb-6 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 sticky top-2 z-20">
+                        <button onClick={() => onExit(seconds)} className="text-teal-600 dark:text-teal-400 font-bold hover:underline">{t('exit')}</button>
+                        <div className="text-center">
+                            <h2 className="font-bold text-sm">{topic.name}</h2>
+                            <p className="text-[11px] text-gray-400">{t('studyModeTitle')}</p>
+                        </div>
+                        <div className="bg-teal-50 dark:bg-teal-900/40 text-teal-600 dark:text-teal-400 px-3 py-1.5 rounded-xl font-extrabold text-sm flex items-center gap-1">
+                            <span>⏱️</span><span>{mins}:{secs}</span>
+                        </div>
+                    </header>
+
+                    <div className="flex-1 space-y-3 pb-10">
+                        {(topic.words || []).map((w, i) => (
+                            <div key={w.id || i} className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 flex justify-between items-center gap-4">
+                                <div className="flex items-center gap-3 flex-1">
+                                    <span className="w-6 h-6 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-400 text-xs font-bold flex items-center justify-center shrink-0">{i + 1}</span>
+                                    <span className="font-extrabold text-base break-words">{w.q}</span>
+                                </div>
+                                <div className="text-right font-bold text-teal-600 dark:text-teal-400 text-base break-words flex-1">
+                                    {w.a}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function CreateTopicMode({ t, language, initialTopic, onSave, onCancel }) {
+            const [topicName, setTopicName] = useState(initialTopic ? initialTopic.name : '');
+            const [words, setWords] = useState(initialTopic && initialTopic.words.length ? initialTopic.words : [{id: Date.now()+'_0', q: '', a: '', createdAt: Date.now()}]);
+            return (
+                <div className="min-h-screen p-5 flex flex-col bg-gray-50 dark:bg-gray-900">
+                    <header className="flex justify-between items-center mb-6 bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+                        <button onClick={onCancel} className="text-red-500 font-bold hover:underline">{t('cancel')}</button>
+                        <h2 className="font-bold">{initialTopic ? t('editTopic') : t('newTopic')}</h2>
+                        <button onClick={() => onSave({id: initialTopic?.id, createdAt: initialTopic?.createdAt, name: topicName || 'Без названия', words: words.filter(w=>w.q.trim()&&w.a.trim())})} className="text-teal-600 dark:text-teal-400 font-bold hover:underline">{t('done')}</button>
+                    </header>
+                    <input type="text" value={topicName} onChange={e=>setTopicName(e.target.value)} placeholder={t('topicName')} className="w-full p-4 text-lg font-bold bg-white dark:bg-gray-800 dark:text-white rounded-2xl mb-4 shadow-sm outline-none border border-gray-100 dark:border-gray-700 focus:border-teal-300 transition" />
+                    <div className="space-y-3 mb-4">
+                        {words.map((w, idx) => (
+                            <div key={w.id} className="flex bg-white dark:bg-gray-800 p-3 rounded-2xl gap-2 shadow-sm border border-gray-100 dark:border-gray-700">
+                                <div className="flex-1 space-y-2">
+                                    <input value={w.q} onChange={e=>{const nw=words.map((item, i) => i === idx ? {...item, q: e.target.value} : item); setWords(nw);}} className="w-full p-2 bg-gray-50 dark:bg-gray-700 dark:text-white rounded-lg outline-none focus:bg-white dark:focus:bg-gray-600 transition" placeholder={t('word')}/>
+                                    <input value={w.a} onChange={e=>{const nw=words.map((item, i) => i === idx ? {...item, a: e.target.value} : item); setWords(nw);}} className="w-full p-2 bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-200 rounded-lg outline-none focus:bg-teal-100 dark:focus:bg-teal-800 transition" placeholder={t('translation')}/>
+                                </div>
+                                <button onClick={() => setWords(words.filter(x => x.id !== w.id))} className="text-red-300 hover:text-red-500 font-bold px-2 text-xl transition">✕</button>
+                            </div>
+                        ))}
+                    </div>
+                    <button onClick={() => setWords([...words, {id: Date.now()+'_'+words.length+'_'+Math.random().toString(36).slice(2,6), q:'', a:'', createdAt: Date.now()}])} className="w-full py-4 text-teal-600 dark:text-teal-400 font-bold border-2 border-dashed border-teal-300 dark:border-teal-700 rounded-2xl bg-teal-50/50 dark:bg-teal-900/20 hover:bg-teal-100 dark:hover:bg-teal-900/40 transition">{t('addCard')}</button>
+                </div>
+            );
+        }
+
+        function FlashcardMode({ t, topic, onRecordAnswer, onBack }) {
+            const [idx, setIdx] = useState(0); 
+            const [flipped, setFlipped] = useState(false);
+            const [words] = useState(() => [...topic.words].sort(() => Math.random() - 0.5));
+            if (!words[idx]) { onBack(); return null; }
+            return (
+                <div className="min-h-screen p-6 flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900">
+                    <button onClick={onBack} className="absolute top-6 left-6 text-gray-500 font-bold bg-white dark:bg-gray-800 px-4 py-2 rounded-full shadow hover:bg-gray-100 transition">{t('exit')}</button>
+                    <h2 className="text-xl font-bold mb-8 mt-10 text-center">{topic.name} <br/><span className="text-teal-500 text-sm">({idx + 1}/{words.length})</span></h2>
+                    <div onClick={() => setFlipped(!flipped)} className="w-full max-w-sm aspect-[4/5] bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-xl flex items-center justify-center p-8 border border-gray-100 dark:border-gray-700 cursor-pointer text-center relative hover:scale-[1.02] transition-transform" style={{ perspective: '1500px' }}>
+                        <div className="w-full h-full flex flex-col justify-center items-center transition-transform duration-500" style={{ transform: flipped ? 'rotateY(180deg)' : 'rotateY(0)', transformStyle: 'preserve-3d' }}>
+                            <p className="absolute top-8 text-teal-400 text-xs font-bold uppercase tracking-widest" style={{ transform: flipped ? 'rotateY(180deg)' : 'rotateY(0)' }}>{flipped ? t('translation') : t('word')}</p>
+                            <h3 className="text-4xl font-extrabold break-words w-full" style={{ transform: flipped ? 'rotateY(180deg)' : 'rotateY(0)' }}>{flipped ? words[idx].a : words[idx].q}</h3>
+                        </div>
+                    </div>
+                    <div className="flex gap-4 mt-12 w-full max-w-sm">
+                        <button onClick={() => { onRecordAnswer(topic.id, words[idx].id, false); setFlipped(false); setTimeout(() => {if(idx+1>=words.length){alert(t('completed')); onBack();}else setIdx(i=>i+1);}, 150); }} className="flex-1 py-4 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-2xl font-bold shadow-sm hover:bg-red-200 transition">{t('dontRemember')}</button>
+                        <button onClick={() => { onRecordAnswer(topic.id, words[idx].id, true); setFlipped(false); setTimeout(() => {if(idx+1>=words.length){alert(t('completed')); onBack();}else setIdx(i=>i+1);}, 150); }} className="flex-1 py-4 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-2xl font-bold shadow-sm hover:bg-green-200 transition">{t('remember')}</button>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
